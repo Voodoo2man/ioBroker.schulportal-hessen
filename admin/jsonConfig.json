@@ -1,0 +1,66 @@
+{
+	"i18n": true,
+	"type": "panel",
+	"items": {
+		"accounts": {
+			"type": "table",
+			"label": "Accounts",
+			"titleAttribute": "displayName",
+			"uniqueColumns": ["id"],
+			"items": [
+				{
+					"attr": "id",
+					"type": "text",
+					"title": "Internal account ID",
+					"defaultFunc": "crypto.randomUUID()",
+					"readOnly": true,
+					"width": "240px"
+				},
+				{
+					"attr": "displayName",
+					"type": "text",
+					"title": "Display name",
+					"default": "",
+					"width": "180px"
+				},
+				{
+					"attr": "schoolId",
+					"type": "text",
+					"title": "School ID",
+					"default": "",
+					"width": "140px"
+				},
+				{
+					"attr": "enabled",
+					"type": "checkbox",
+					"title": "Enabled",
+					"default": false,
+					"width": "90px"
+				},
+				{
+					"attr": "credentialId",
+					"type": "credential",
+					"default": "",
+					"credentialType": "custom",
+					"title": "Custom login/password credential",
+					"width": "240px"
+				}
+			]
+		},
+		"refreshIntervalMinutes": {
+			"type": "number",
+			"label": "Refresh interval",
+			"default": 60,
+			"min": 5,
+			"max": 1440,
+			"step": 1,
+			"unit": "min",
+			"newLine": true,
+			"xs": 12,
+			"sm": 12,
+			"md": 6,
+			"lg": 4,
+			"xl": 4
+		}
+	}
+}

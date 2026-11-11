@@ -1,0 +1,10 @@
+{
+	"schulportal-hessen adapter settings": "Налаштування адаптера для schulportal-hessen",
+	"Accounts": "Облікові записи",
+	"Internal account ID": "Внутрішній ідентифікатор облікового запису",
+	"Display name": "Відображуване ім’я",
+	"School ID": "Ідентифікатор школи",
+	"Enabled": "Увімкнено",
+	"Custom login/password credential": "Користувацькі облікові дані (логін/пароль)",
+	"Refresh interval": "Інтервал оновлення"
+}

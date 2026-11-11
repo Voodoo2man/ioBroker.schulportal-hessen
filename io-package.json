@@ -1,0 +1,91 @@
+{
+	"common": {
+		"name": "schulportal-hessen",
+		"version": "0.0.1",
+		"news": {
+			"0.0.1": {
+				"en": "initial release",
+				"de": "Erstveröffentlichung",
+				"ru": "Начальная версия",
+				"pt": "lançamento inicial",
+				"nl": "Eerste uitgave",
+				"fr": "Première version",
+				"it": "Versione iniziale",
+				"es": "Versión inicial",
+				"pl": "Pierwsze wydanie",
+				"uk": "Початкова версія",
+				"zh-cn": "首次出版"
+			}
+		},
+		"titleLang": {
+			"en": "Schulportal Hessen",
+			"de": "Schulportal Hessen",
+			"ru": "Шульпорталь Гессен",
+			"pt": "Schulportal Hessen",
+			"nl": "Schulportal Hessen",
+			"fr": "Schulportal Hesse",
+			"it": "Schulportal Assia",
+			"es": "Portal escolar de Hessen",
+			"pl": "Schulportal Hesja",
+			"uk": "Шульпорталь Гессен",
+			"zh-cn": "黑森州学校门户网站"
+		},
+		"desc": {
+			"en": "Adapter for the Schulportal Hessen school portal",
+			"de": "Adapter für das Schulportal Hessen",
+			"ru": "Адаптер для школьного портала Schulportal Hessen",
+			"pt": "Adaptador para o portal escolar Schulportal Hessen",
+			"nl": "Adapter voor het Schulportal Hessen-schoolportaal",
+			"fr": "Adaptateur pour le portail scolaire Schulportal Hessen",
+			"it": "Adattatore per il portale scolastico Schulportal Hessen",
+			"es": "Adaptador para el portal escolar Schulportal Hessen",
+			"pl": "Adapter do portalu szkolnego Schulportal Hessen",
+			"uk": "Адаптер для шкільного порталу Schulportal Hessen",
+			"zh-cn": "Schulportal Hessen 学校门户的适配器"
+		},
+		"authors": [
+			"Voodoo2man <62031459+Voodoo2man@users.noreply.github.com>"
+		],
+		"keywords": [
+			"school",
+			"education",
+			"schulportal",
+			"hessen"
+		],
+		"licenseInformation": {
+			"type": "free",
+			"license": "MIT"
+		},
+		"platform": "Javascript/Node.js",
+		"icon": "schulportal-hessen.png",
+		"enabled": true,
+		"extIcon": "https://raw.githubusercontent.com/Voodoo2man/ioBroker.schulportal-hessen/main/admin/schulportal-hessen.png",
+		"readme": "https://github.com/Voodoo2man/ioBroker.schulportal-hessen/blob/main/README.md",
+		"loglevel": "info",
+		"tier": 3,
+		"mode": "daemon",
+		"type": "misc-data",
+		"compact": true,
+		"connectionType": "cloud",
+		"dataSource": "poll",
+		"adminUI": {
+			"config": "json"
+		},
+		"dependencies": [
+			{
+				"js-controller": ">=7.2.2"
+			}
+		],
+		"globalDependencies": [
+			{
+				"admin": ">=7.9.0"
+			}
+		]
+	},
+	"native": {
+		"accounts": [],
+		"refreshIntervalMinutes": 60
+	},
+	"objects": [],
+	"instanceObjects": []
+}

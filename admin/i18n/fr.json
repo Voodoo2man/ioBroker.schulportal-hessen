@@ -1,0 +1,10 @@
+{
+	"schulportal-hessen adapter settings": "Paramètres d'adaptateur pour schulportal-hessen",
+	"Accounts": "Comptes",
+	"Internal account ID": "ID de compte interne",
+	"Display name": "Nom affiché",
+	"School ID": "ID de l’établissement scolaire",
+	"Enabled": "Activé",
+	"Custom login/password credential": "Identifiant personnalisé (nom d’utilisateur/mot de passe)",
+	"Refresh interval": "Intervalle d’actualisation"
+}
