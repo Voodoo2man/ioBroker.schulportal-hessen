@@ -1,4 +1,5 @@
-![Banner](Banner.png)
+<img src="Banner.png" alt="Banner" width="50%">
+
 # ioBroker.schulportal-hessen
 
 [![NPM version](https://img.shields.io/npm/v/iobroker.schulportal-hessen.svg)](https://www.npmjs.com/package/iobroker.schulportal-hessen)
@@ -10,119 +11,148 @@
 
 **Tests:** ![Test and Release](https://github.com/Voodoo2man/ioBroker.schulportal-hessen/workflows/Test%20and%20Release/badge.svg)
 
-## schulportal-hessen adapter for ioBroker
+## Overview
 
-Adapter for the Schulportal Hessen school portal
+`ioBroker.schulportal-hessen` reads verified Schulportal Hessen data and exposes it as read-only ioBroker states. Each adapter instance is configured for **one account and one school**. Add another adapter instance to keep a separate account or school isolated. The adapter does not perform portal actions or download files.
 
-## Developer manual
-This section is intended for the developer. It can be deleted later.
+No live adapter runtime test has been performed. Portal layouts, permissions, and enabled modules vary; an unsupported or incomplete response is reported instead of being treated as a confirmed empty result.
 
-### DISCLAIMER
+## Requirements
 
-Please make sure that you consider copyrights and trademarks when you use names or logos of a company and add a disclaimer to your README.
-You can check other adapters for examples or ask in the developer community. Using a name or logo of a company without permission may cause legal problems for you.
+- Node.js 22 or newer.
+- js-controller 7.2.2 or newer.
+- Admin 8.3.5 or newer for the central credential selector.
+- An active Schulportal Hessen account and a school in the public school directory.
 
-### Getting started
+## Configuration
 
-You are almost done, only a few steps left:
-1. Create a new repository on GitHub with the name `ioBroker.schulportal-hessen`
-1. Initialize the current folder as a new git repository:  
-	```bash
-	git init -b main
-	git add .
-	git commit -m "Initial commit"
-	```
-1. Link your local repository with the one on GitHub:  
-	```bash
-	git remote add origin https://github.com/Voodoo2man/ioBroker.schulportal-hessen
-	```
+1. In **Admin → Settings → Credentials**, create a credential of type **Custom** with the portal username in `login` and the password in `password`.
+2. In this adapter instance, enter at least two characters in **Search schools by name, town, or ID**, then explicitly choose a result from **Select a matching school**. Typing a school name does not set the school ID: only selecting a directory result stores its numeric ID. Up to 50 matches are shown, searched across school name, town, and ID. For a portal link such as `https://login.schulportal.hessen.de/i=5202`, search for `5202` only, not the full URL or `i=` prefix. Set an optional account display name and select the central credential. The credential ID is referenced by configuration; the login and password are not copied to native settings or states.
+3. Set the refresh interval from 5 to 1440 minutes (default: 60 minutes).
 
-1. Push all files to the GitHub repo:  
-	```bash
-	git push origin main
-	```
-1. Add a new secret under https://github.com/Voodoo2man/ioBroker.schulportal-hessen/settings/secrets. It must be named `AUTO_MERGE_TOKEN` and contain a personal access token with push access to the repository, e.g. yours. You can create a new token under https://github.com/settings/tokens.
+Keep the adapter instance running while selecting a school: Admin requests the matching options through the adapter's messagebox, so the selector cannot populate while the instance is stopped. The public school list is cached in the adapter instance for up to six hours. Directory lookup does not use the selected credential. While the account identity settings are incomplete or the school ID is invalid, the adapter remains available in an invalid-configuration state only to serve school searches; it does not attempt portal login or data retrieval until the required settings are valid. If the public list is temporarily unavailable, retry the search later. The non-sensitive search term is stored in the instance configuration and is not used for authentication.
 
-1. Head over to [src/main.ts](src/main.ts) and start programming!
+For another account or school, create another adapter instance and select its own credential. The instance, session, cookies, status, and object tree stay isolated. If migrating from an older multi-account configuration, move each account into a separate instance; a non-empty legacy `accounts` array is rejected rather than silently dropping accounts, while an empty legacy array is ignored. Do not put passwords in display names, logs, states, or exported configuration.
 
-### Best Practices
-We've collected some [best practices](https://github.com/ioBroker/ioBroker.repositories#development-and-coding-best-practices) regarding ioBroker development and coding in general. If you're new to ioBroker or Node.js, you should
-check them out. If you're already experienced, you should also take a look at them - you might learn something new :)
+A parent login is recognized only when the portal exposes its verified account-type marker. In the verified parent lesson layout, the adapter matches `#p<digits>` tab links to unique lesson panels and reads tables only within those panels. Each student's data is stored under `students.<readableStudentSlug>`; the visible portal tab label supplies the stable, collision-safe slug, while the source panel identifier remains an internal hash mapped by `students.pathMapping`. Verified lesson sections such as `current`, `assignments`, `attendance`, `history`, `marks`, `exams`, and `other` appear only when supported by the source table structure. The `students.lessons` aggregate remains available. For parent timetables, the adapter follows verified child links from the `Lernende` panel, matches each numeric `p` identifier to the same internal hash used by lessons, and stores only each student's personal `#own` timetable under `students.<readableStudentSlug>.timetable`; class-wide `#all` tables are never assigned to an individual. The top-level `students.timetable` aggregate remains empty for a fully read parent account, while a verified single-student timetable is stored there. All linked detail requests must complete before existing timetable data is replaced. Up to 20 child tabs and 20 timetable detail pages are accepted per refresh; larger, incomplete, or unsupported layouts preserve prior data. Student IDs are never derived from array positions. The adapter no longer creates the old `account.*` object hierarchy; manually delete that old subtree after upgrading if it is still present.
 
-### State Roles
-When creating state objects, it is important to use the correct role for the state. The role defines how the state should be interpreted by visualizations and other adapters. For a list of available roles and their meanings, please refer to the [state roles documentation](https://www.iobroker.net/#en/documentation/dev/stateroles.md).
+## Read-only data and current coverage
 
-**Important:** Do not invent your own custom role names. If you need a role that is not part of the official list, please contact the ioBroker developer community for guidance and discussion about adding new roles.
+Only the verified login/session flow and the following read requests are enabled:
 
-### Scripts in `package.json`
-Several npm scripts are predefined for your convenience. You can run them using `npm run <scriptname>`
-| Script name | Description |
-|-------------|-------------|
-| `build` | Compile the TypeScript sources. |
-| `watch` | Compile the TypeScript sources and watch for changes. |
-| `test:ts` | Executes the tests you defined in `*.test.ts` files. |
-| `test:package` | Ensures your `package.json` and `io-package.json` are valid. |
-| `test:integration` | Tests the adapter startup with an actual instance of ioBroker. |
-| `test` | Performs a minimal test run on package files and your tests. |
-| `check` | Performs a type-check on your code (without compiling anything). |
-| `lint` | Runs `ESLint` to check your code for formatting errors and potential bugs. |
-| `translate` | Translates texts in your adapter to all required languages, see [`@iobroker/adapter-dev`](https://github.com/ioBroker/adapter-dev#manage-translations) for more details. |
-| `release` | Creates a new release, see [`@alcalzone/release-script`](https://github.com/AlCalzone/release-script#usage) for more details. |
+| Data area                       | Verified request                                                                                                                                                   | Output and limitations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profile                         | `GET /benutzerverwaltung.php?a=userData`                                                                                                                           | Preserves recognized profile table label/value pairs and an account-type marker when present. It does not identify linked children or infer the school ID from profile text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Timetable                       | `GET /stundenplan.php`; on a verified parent account, follows the child links to `GET /stundenplan.php?e=1&a=detail_klasse&k=…&p=…`                                | Preserves recognized single-student tables in `#all` and `#own` under `students.timetable`. For parent accounts, matches each detail page's `p` identifier to the internal student hash and stores only `#own` rows under `students.<readableStudentSlug>.timetable`; `#all` remains class-wide and is not assigned to an individual. Every linked detail page must parse successfully before child timetable data is replaced. A footer-only table is classified as unavailable, not timetable data.                                                                                                                                                                                                                                                                                                          |
+| Substitutions                   | `GET /vertretungsplan.php`; uses verified server-rendered own-plan date tables when available, otherwise a read-only day request for each verified `data-tag` date | Preserves structured rows with their portal date. All advertised days must be read successfully; more than 31 dates or a partial response leaves prior data intact.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Calendar events                 | Read-only `getEvents` form request to `/kalender.php` for 120 days before through 356 days after the current Berlin date                                           | Preserves source date/time fields unchanged and includes only events whose safely parsed Berlin-local start or end date is today or later. Past-only and individually undatable events are omitted from JSON, counts, and record channels. Record channels use readable IDs prefixed with the event's `YYYY-MM-DD` start date.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| School calendar                 | `GET /kalender.php?a=export&export=csv&year=…`, with iCalendar fallback                                                                                            | Parses recognized CSV or iCalendar events, preserves source date/time fields, and applies the same Berlin-local today/future filtering and date-prefixed readable channel IDs as the portal calendar. Past-only and undatable events are omitted individually. The school year is selected using verified Hessian summer-holiday end dates through 2030; an August-based fallback is used beyond that table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| My lessons and entries          | `GET /meinunterricht.php?cacheBreaker=…`; then `GET /meinunterricht.php?a=view&id=…` for exact numeric detail links                                                | Preserves printable `#mappen` rows in the single-student layout and recognized detail tables (`history`, `attendanceTable`, `marks`, and `klausuren`). For the verified parent format, matches `#p<digits>` tabs to unique panels, keeps the student aggregate, and separates verified nested tables into `current`, `attendance`, and other confirmed section channels under `students.<readableStudentSlug>.lessons`. Empty or unsupported panes are not treated as confirmed empty data. At most 20 child tabs and 20 linked course details are accepted per refresh; larger or incomplete aggregations preserve the previous complete result. Homework-related CSS markers are retained as source markers, not converted into a completion state. |
+| Learning groups and assessments | `GET /lerngruppen.php`                                                                                                                                             | Preserves recognized tables in `#LGs` and `#klausuren`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Inbox messages                  | `a=headers` plus bounded `a=read` detail requests to `/nachrichten.php`                                                                                  | Exposes safe headers, message text, reply text, dates, authors, and verified conversation flags/statistics in `inbox.read` and `inbox.unread`; source IDs are hashed. Hidden messages are not opened. At most 20 visible conversations and 4 MiB of aggregated inbox data are accepted per refresh; a failed, unsupported, or oversized detail read preserves the previous complete inbox. The verified `a=read` request may clear unread locally; whether that persists server-side remains unverified. No reply, send, hide, or delete action is implemented.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Files and folders               | `GET /dateispeicher.php?a=view&folder=…`                                                                                                                           | Recursively reads metadata for at most 100 folders per refresh. Preserves file-table columns and folder descriptions/counts; download links are omitted and files are never downloaded. A failed/incomplete traversal preserves the previous complete result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
-### Configuring the compilation
-The adapter template uses [esbuild](https://esbuild.github.io/) to compile TypeScript and/or React code. You can configure many compilation settings 
-either in `tsconfig.json` or by changing options for the build tasks. These options are described in detail in the
-[`@iobroker/adapter-dev` documentation](https://github.com/ioBroker/adapter-dev#compile-adapter-files).
+For HTML responses, only the verified page sections and table structures listed above are accepted. JSON endpoints must return a recognized top-level array. The parser preserves source date/time text and filters credentials, session data, markup, unsafe URLs, and file links. Calendar and substitution request dates are calculated as Europe/Berlin calendar dates across daylight-saving changes; source timestamps are not converted and no missing time is invented.
 
-### Writing tests
-When done right, testing code is invaluable, because it gives you the 
-confidence to change your code while knowing exactly if and when 
-something breaks. A good read on the topic of test-driven development 
-is https://hackernoon.com/introduction-to-test-driven-development-tdd-61a13bc92d92. 
-Although writing tests before the code might seem strange at first, but it has very 
-clear upsides.
+No dedicated absence, lateness, excuse-submission, homework-completion, message-reply, file-download, or other write/action flow is implemented. A table that appears in a verified lesson detail is exposed as source data only; it is not treated as proof of an absence or a submitted excuse. Opening a visible inbox conversation uses the verified `a=read` detail request and may mark it read; no reply/send, hide/delete, upload, or other portal action is implemented.
 
-The template provides you with basic tests for the adapter startup and package files.
-It is recommended that you add your own tests into the mix.
+## Objects and updates
 
-### Publishing the adapter
-Using GitHub Actions, you can enable automatic releases on npm whenever you push a new git tag that matches the form 
-`v<major>.<minor>.<patch>`. We **strongly recommend** that you do. The necessary steps are described in `.github/workflows/test-and-release.yml`.
+The main tree is:
 
-Since you installed the release script, you can create a new
-release simply by calling:
-```bash
-npm run release
-```
-Additional command line options for the release script are explained in the
-[release-script documentation](https://github.com/AlCalzone/release-script#command-line).
-
-To get your adapter released in ioBroker, please refer to the documentation 
-of [ioBroker.repositories](https://github.com/ioBroker/ioBroker.repositories#requirements-for-adapter-to-get-added-to-the-latest-repository).
-
-### Test the adapter manually with dev-server
-Since you set up `dev-server`, you can use it to run, test and debug your adapter.
-
-You may start `dev-server` by calling from your dev directory:
-```bash
-dev-server watch
+```text
+schulportal-hessen.0
+├── info.connection                 # true when this instance authenticated in the latest cycle
+├── info.status                     # connected, partial, disconnected, or not-configured
+├── info.lastUpdate                 # Unix time in ms; updated if at least one area completed
+├── info.lastError                  # safe status code only
+├── info.refresh                    # write true to request an immediate refresh
+├── profile                         # verified profile records
+├── calendar
+│   ├── portal                      # portal events filtered to today/future
+│   └── school                      # school-calendar events filtered to today/future
+├── inbox
+│   ├── count / json / unreadCount  # complete aggregate; IDs are hashes
+│   ├── read                        # visible conversations with unread=false
+│   │   └── <readableRecordSlug>    # header, message text, replies, safe metadata
+│   └── unread                      # visible conversations with unread=true
+│       └── <readableRecordSlug>
+├── files                           # verified file/folder metadata
+├── learningGroups                  # verified learning-group records
+├── substitutions                  # verified substitution data
+└── students
+    ├── timetable                   # status first; data after a verified read; empty for a complete parent read
+    ├── lessons                     # verified lesson aggregate
+    ├── recordIds                   # internal student source-hash manifest
+    ├── pathMapping                 # internal source-hash to readable student path mapping
+    ├── pendingTimetablePaths       # internal paths awaiting complete synchronization
+    └── <readableStudentSlug>       # derived from the visible portal tab label
+        ├── info
+        ├── timetable                # status first; schedule data only after a verified student read
+        │   ├── today / tomorrow
+        │   │   └── lessons
+        │   │       └── 01            # one channel per timetable hour
+        │   └── week.<weekday>.lessons
+        │       └── 01
+        └── lessons                  # aggregate plus verified sections
+            ├── <readableRecordSlug> # direct channel per record
+            ├── current / assignments / attendance
+            └── history / marks / exams / other # when verified
 ```
 
-The ioBroker.admin interface will then be available at http://localhost:8081/
+Successfully read data resource channels contain `status`, `count`, `lastUpdate`, `json`, and internal `recordIds` and `recordPaths` manifests. The manifests retain source hashes while record channels use readable ASCII slugs of up to 64 characters derived from visible names; collisions receive deterministic numeric suffixes. Calendar record IDs begin with the event's Berlin-local `YYYY-MM-DD` start date, making the channels lexically sortable; source date/time values remain unchanged, and past-only or undatable events are omitted from the complete JSON, count, and channel output. `students.pathMapping` maps verified child source hashes to readable slugs derived only from visible portal labels. `pendingTimetablePaths` tracks prior readable paths during a confirmed path change; an existing timetable is preserved until complete data is written to its new path. A timetable that has never completed a verified read exposes its status without a fabricated zero count or empty aggregate; failed refreshes update that status while retaining previously read data. Incomplete parent timetable reads report a fixed safe reason code so a missing child section is distinguishable from an unsupported detail-page layout. `json` remains an aggregate array, but there is no `records` folder: each record is its own channel directly under the resource or verified section, with table columns or scalar JSON properties exposed as individual read-only states. Record channel display names use the section and visible cell values where available, while record IDs remain opaque hashes and path segments use readable slugs. Inbox JSON contains safe message headers and validated message text/replies; `read` and `unread` categories include records only when the verified `unread` flag is boolean. Only visible conversations are opened, using hashed IDs publicly and transient source IDs for the request; the detail limit is 20 conversations and the aggregate limit is 4 MiB. An incomplete detail aggregation keeps the prior inbox unchanged. For a fully read parent timetable, `students.timetable` is a complete empty aggregate and each student timetable contains only verified personal `#own` rows; class-wide `#all` rows are not copied to students. Timetable rows appear under `today`, `tomorrow`, and `week.<weekday>.lessons`; each day's hours are numbered `01`, `02`, and so on, and the readable record name is retained. The seven-day week starts today, so a weekday earlier than today is mapped to its next occurrence (for example, a Wednesday refresh puts Tuesday under the following Tuesday). Date selection uses Europe/Berlin. Student lesson sections are created only for structurally verified tables, including confirmed empty tables. HTML columns use sanitized header-based state IDs and visible values; hidden portal encoding fields are excluded. Lesson-detail records include the numeric `courseId`; parent lesson records also carry only the opaque student hash in `context.childId`. File records include the numeric `parentFolderId`. Internal record/source IDs remain hashes rather than student names or array positions; readable path segments come from visible names, while timetable lesson channels retain their numbered positions.
 
-Please refer to the [`dev-server` documentation](https://github.com/ioBroker/dev-server#command-line) for more details.
+Example record values (synthetic):
+
+```json
+[
+	{
+		"format": "html",
+		"id": "hash:0000000000000000000000000000000000000000000000000000000000000000",
+		"section": "mappen",
+		"attributes": {},
+		"fields": [{ "header": "Title", "text": "Example assignment", "links": [], "attributes": {} }],
+		"markers": ["homework", "undone"],
+		"courseId": "42"
+	}
+]
+```
+
+`count` is the number of records. A complete response replaces that area's data; stale dynamic objects are removed only after a complete result, including a source-confirmed empty result. Network, authentication, permission, unsupported-layout, malformed-response, over-limit, or incomplete multi-request results preserve the last successful data and update the area's status. Parent child channels and their records are synchronized only after a complete lesson aggregation; stale child channels are removed only after a complete parent or single-student lesson result. Refresh triggers are coalesced; ordinary transient failures are retried on the next interval. An expired session or the portal's `Login nötig` forward page triggers one re-authentication and retry. All resources are polled sequentially to limit portal load.
+
+`info.connection` reports whether this instance's account authenticated, even if an optional data area is unavailable. `info.lastUpdate` changes when at least one data area completed successfully. Resource statuses distinguish complete data from permission/module unavailability and invalid, oversized, or failed responses. Invalid parser results include a fixed safe reason code in the resource status; message-header decode failures may include a fixed safe phase code. Timetable and lessons diagnostics distinguish missing known sections, tables outside those sections, missing tables within a known section, and invalid table structure without exposing page content. `info.lastError` names the first incomplete resource and its safe status; authentication failures also identify the failed protocol phase and, when available, the numeric HTTP status. `connect-session-missing-no-cookie` means no cookie was eligible to send to the connect host; `connect-session-missing-cookie-sent` means a cookie was sent but the connect endpoint still redirected to the login host. Neither condition alone proves that the password is wrong. Logs and states never include credentials, usernames, response bodies, cookies, redirect destinations, or raw transport errors. At debug level, oversized-response diagnostics include only the configured byte limit, declared `Content-Length` when available (otherwise a streaming-limit indicator), HTTP status, and allowlisted content-type label. If streaming exceeds the limit without a declared `Content-Length`, a fixed prefix classification (such as JSON object, JSON object with `rows`, JSON array, HTML, plain text, or unknown) is derived from at most 512 bytes already read; declared-oversize responses are not read and are marked `not-inspected`. Only that classification is retained or logged; prefix bytes and message text are not. The reported timetable structure error additionally logs its fixed parser reason, HTTP status, allowlisted content-type label, and response-body byte length. School-search debug logs include only the search-text length and result count, never the entered search text. Optional unavailable modules do not by themselves disconnect the account.
+
+## Privacy and security
+
+This adapter handles personal data, potentially about minors. Account requests go only to the Schulportal Hessen login, connect, and start hosts needed for authentication and the verified portal reads. The school selector additionally fetches the public school list from `startcache.schulportal.hessen.de`; it sends no account credentials or personal data. There is no telemetry or third-party data forwarding. HTTPS certificate checks remain enabled. Passwords, cookies, session keys, raw source message IDs, and raw encrypted responses are not logged or stored in states; message bodies and replies are stored in ioBroker states on your installation. Opening a visible conversation through `a=read` may mark it read locally, and server-side persistence of that status is not confirmed. Restrict access to the states and configure retention and backups carefully.
+
+## References and limitations
+
+Authentication and read behavior were checked against the implementations of [sph-ha](https://github.com/leonsio/sph-ha), [Lanis Mobile](https://github.com/lanis-mobile/lanis), and [SPHclient](https://github.com/lanis-mobile/SPHclient). The message-header and `a=read` detail request, encrypted wrappers, and verified conversation fields were checked against the [`liblanis` conversation parser](https://github.com/lanis-mobile/liblanis/blob/bb02aed2a5407819dbe11deedb4735841dd912e8/lib/src/applets/conversations/parser.dart), [conversation model](https://github.com/lanis-mobile/liblanis/blob/bb02aed2a5407819dbe11deedb4735841dd912e8/lib/src/models/conversations.dart), and [cryptor](https://github.com/lanis-mobile/liblanis/blob/bb02aed2a5407819dbe11deedb4735841dd912e8/lib/src/session/cryptor.dart). The school selector uses the public directory endpoint called by the [Schulportal login page](https://login.schulportal.hessen.de/): `https://startcache.schulportal.hessen.de/exporteur.php?a=schoollist`. No source code was copied. `sph-ha` and SPHclient are MIT-licensed; Lanis Mobile is GPL-3.0. This adapter remains MIT-licensed and does not add a GPL dependency.
+
+No live-account adapter runtime test has been performed. The parent lesson tabs and the parent timetable's learner links and `#all`/`#own` detail layout were verified through authenticated portal inspection; the adapter supports only the strict tab/link structures it recognizes. Parent timetable rows are now fetched from the linked detail pages and only the personal `#own` section is assigned to the matching opaque child ID. The adapter still needs an authorized-account refresh to confirm the newly implemented retrieval against a live installation. Other account-specific profile and lesson layouts, school-specific calendar/substitution responses, message-header side effects, module permissions, and the availability of each data area still require verification. Unsupported structures are reported rather than represented as confirmed empty data.
 
 ## Changelog
+
 <!--
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
 
 ### **WORK IN PROGRESS**
-- (Voodoo2man) Updated the adapter icon and README banner.
-- (Voodoo2man) Created the initial Schulportal Hessen adapter scaffold.
+
+- (Voodoo2man) Replaced the old account hierarchy with readable profile, calendar, inbox, file, learning-group, substitution, and student paths; filtered current calendar events and grouped message headers.
+- (Voodoo2man) Added bounded inbox message and reply retrieval with hashed source IDs and atomic fallback on incomplete details.
+- (Voodoo2man) Assigned student and record channels readable, collision-safe paths while retaining internal source mappings and confirmed timetables through migration.
+- (Voodoo2man) Exposed student records as readable per-record channels and organized personal timetables into numbered today, tomorrow, and rolling-week schedules.
+- (Voodoo2man) Fixed parent lesson parsing when the portal reused row identifiers.
+- (Voodoo2man) Added isolated single-account sessions and bounded read-only retrieval for verified portal areas.
+- (Voodoo2man) Improved portal session recovery, message-header retrieval, and bounded response diagnostics.
+- (Voodoo2man) Raised the minimum Node.js runtime to 22.
+- (Voodoo2man) Added separate parent-child lesson channels, parsed visible substitution tables and current file-folder markup, and classified footer-only timetable tables as unavailable.
 
 ## License
+
 MIT License
 
 Copyright (c) 2026 Voodoo2man <Voodoo2man@outlook.de>
