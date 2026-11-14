@@ -1,4 +1,4 @@
-<img src="Banner.png" alt="Banner" width="50%">
+<img src="Banner.png" alt="Banner" width="70%">
 
 # ioBroker.schulportal-hessen
 
