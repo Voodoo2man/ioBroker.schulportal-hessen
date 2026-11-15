@@ -66,6 +66,7 @@
 		"mode": "daemon",
 		"type": "misc-data",
 		"compact": true,
+		"messagebox": true,
 		"connectionType": "cloud",
 		"dataSource": "poll",
 		"adminUI": {
@@ -78,12 +79,15 @@
 		],
 		"globalDependencies": [
 			{
-				"admin": ">=7.9.0"
+				"admin": ">=8.3.5"
 			}
 		]
 	},
 	"native": {
-		"accounts": [],
+		"accountName": "",
+		"schoolSearch": "",
+		"schoolId": "",
+		"credentialId": "",
 		"refreshIntervalMinutes": 60
 	},
 	"objects": [],

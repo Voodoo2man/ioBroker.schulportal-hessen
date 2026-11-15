@@ -1,10 +1,9 @@
 {
 	"schulportal-hessen adapter settings": "Configurações do adaptador para schulportal-hessen",
-	"Accounts": "Contas",
-	"Internal account ID": "ID interno da conta",
-	"Display name": "Nome de exibição",
-	"School ID": "ID da escola",
-	"Enabled": "Ativada",
+	"Account name (optional)": "Nome da conta (opcional)",
+	"Search schools by name, town, or ID": "Pesquisar escolas por nome, cidade ou ID",
+	"Enter at least two characters, then choose a matching school below.": "Introduza pelo menos dois caracteres e escolha abaixo uma escola correspondente.",
+	"Select a matching school": "Selecione uma escola correspondente",
 	"Custom login/password credential": "Credencial personalizada (usuário/senha)",
 	"Refresh interval": "Intervalo de atualização"
 }

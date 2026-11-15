@@ -1,10 +1,9 @@
 {
 	"schulportal-hessen adapter settings": "Adapter settings for schulportal-hessen",
-	"Accounts": "Accounts",
-	"Internal account ID": "Internal account ID",
-	"Display name": "Display name",
-	"School ID": "School ID",
-	"Enabled": "Enabled",
+	"Account name (optional)": "Account name (optional)",
+	"Search schools by name, town, or ID": "Search schools by name, town, or ID",
+	"Enter at least two characters, then choose a matching school below.": "Enter at least two characters, then choose a matching school below.",
+	"Select a matching school": "Select a matching school",
 	"Custom login/password credential": "Custom login/password credential",
 	"Refresh interval": "Refresh interval"
 }

@@ -2,50 +2,57 @@
 	"i18n": true,
 	"type": "panel",
 	"items": {
-		"accounts": {
-			"type": "table",
-			"label": "Accounts",
-			"titleAttribute": "displayName",
-			"uniqueColumns": ["id"],
-			"items": [
-				{
-					"attr": "id",
-					"type": "text",
-					"title": "Internal account ID",
-					"defaultFunc": "crypto.randomUUID()",
-					"readOnly": true,
-					"width": "240px"
-				},
-				{
-					"attr": "displayName",
-					"type": "text",
-					"title": "Display name",
-					"default": "",
-					"width": "180px"
-				},
-				{
-					"attr": "schoolId",
-					"type": "text",
-					"title": "School ID",
-					"default": "",
-					"width": "140px"
-				},
-				{
-					"attr": "enabled",
-					"type": "checkbox",
-					"title": "Enabled",
-					"default": false,
-					"width": "90px"
-				},
-				{
-					"attr": "credentialId",
-					"type": "credential",
-					"default": "",
-					"credentialType": "custom",
-					"title": "Custom login/password credential",
-					"width": "240px"
-				}
-			]
+		"accountName": {
+			"type": "text",
+			"label": "Account name (optional)",
+			"default": "",
+			"maxLength": 100,
+			"xs": 12,
+			"sm": 12,
+			"md": 6,
+			"lg": 4,
+			"xl": 4
+		},
+		"schoolSearch": {
+			"type": "text",
+			"label": "Search schools by name, town, or ID",
+			"help": "Enter at least two characters, then choose a matching school below.",
+			"default": "",
+			"maxLength": 100,
+			"newLine": true,
+			"xs": 12,
+			"sm": 12,
+			"md": 6,
+			"lg": 4,
+			"xl": 4
+		},
+		"schoolId": {
+			"type": "selectSendTo",
+			"label": "Select a matching school",
+			"command": "searchSchools",
+			"jsonData": "{\"query\":\"${data.schoolSearch}\"}",
+			"alsoDependsOn": ["schoolSearch"],
+			"noTranslation": true,
+			"manual": false,
+			"default": "",
+			"newLine": true,
+			"xs": 12,
+			"sm": 12,
+			"md": 6,
+			"lg": 4,
+			"xl": 4
+		},
+		"credentialId": {
+			"type": "credential",
+			"label": "Custom login/password credential",
+			"default": "",
+			"credentialType": "custom",
+			"newLine": true,
+			"xs": 12,
+			"sm": 12,
+			"md": 6,
+			"lg": 4,
+			"xl": 4
 		},
 		"refreshIntervalMinutes": {
 			"type": "number",

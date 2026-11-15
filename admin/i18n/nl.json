@@ -1,10 +1,9 @@
 {
 	"schulportal-hessen adapter settings": "Adapterinstellingen voor schulportal-hessen",
-	"Accounts": "Accounts",
-	"Internal account ID": "Interne account-ID",
-	"Display name": "Weergavenaam",
-	"School ID": "School-ID",
-	"Enabled": "Ingeschakeld",
+	"Account name (optional)": "Accountnaam (optioneel)",
+	"Search schools by name, town, or ID": "Zoek scholen op naam, plaats of ID",
+	"Enter at least two characters, then choose a matching school below.": "Voer minstens twee tekens in en kies hieronder een overeenkomende school.",
+	"Select a matching school": "Selecteer een overeenkomende school",
 	"Custom login/password credential": "Aangepaste inloggegevens (gebruikersnaam/wachtwoord)",
 	"Refresh interval": "Verversingsinterval"
 }

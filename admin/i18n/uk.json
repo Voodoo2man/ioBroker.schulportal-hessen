@@ -1,10 +1,9 @@
 {
 	"schulportal-hessen adapter settings": "Налаштування адаптера для schulportal-hessen",
-	"Accounts": "Облікові записи",
-	"Internal account ID": "Внутрішній ідентифікатор облікового запису",
-	"Display name": "Відображуване ім’я",
-	"School ID": "Ідентифікатор школи",
-	"Enabled": "Увімкнено",
+	"Account name (optional)": "Назва облікового запису (необов’язково)",
+	"Search schools by name, town, or ID": "Пошук шкіл за назвою, населеним пунктом або ID",
+	"Enter at least two characters, then choose a matching school below.": "Введіть щонайменше два символи, а потім виберіть відповідну школу нижче.",
+	"Select a matching school": "Виберіть відповідну школу",
 	"Custom login/password credential": "Користувацькі облікові дані (логін/пароль)",
 	"Refresh interval": "Інтервал оновлення"
 }

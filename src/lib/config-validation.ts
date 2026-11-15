@@ -1,10 +1,37 @@
-const CREDENTIALS_PREFIX = 'system.credentials.';
-const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const CENTRAL_CREDENTIAL_ID_PATTERN = /^system\.credentials\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
+const SCHOOL_ID_PATTERN = /^\d{1,20}$/;
+
+export const RECOVERABLE_SCHOOL_ID_ERROR = 'schoolId must be a numeric Schulportal school ID of 1 to 20 digits';
+const SCHOOL_CREDENTIAL_PAIR_ERROR = 'schoolId and credentialId must both be configured for an account';
+const ACCOUNT_NAME_REQUIREMENT_ERROR = 'accountName may only be set when both schoolId and credentialId are configured';
+const RECOVERABLE_SCHOOL_SEARCH_ERRORS = new Set([
+	RECOVERABLE_SCHOOL_ID_ERROR,
+	SCHOOL_CREDENTIAL_PAIR_ERROR,
+	ACCOUNT_NAME_REQUIREMENT_ERROR,
+]);
+
+/**
+ * Check whether validation failed only because account selection is incomplete.
+ *
+ * @param errors Adapter configuration validation errors.
+ * @returns True when Admin school search can safely recover the configuration.
+ */
+export function hasOnlyRecoverableSchoolSearchErrors(errors: readonly string[]): boolean {
+	return errors.length > 0 && errors.every(error => RECOVERABLE_SCHOOL_SEARCH_ERRORS.has(error));
+}
 
 export const DEFAULT_REFRESH_INTERVAL_MINUTES = 60;
 export const MIN_REFRESH_INTERVAL_MINUTES = 5;
 export const MAX_REFRESH_INTERVAL_MINUTES = 1440;
 
+const ALLOWED_CONFIG_FIELDS = new Set([
+	'accountName',
+	'schoolSearch',
+	'schoolId',
+	'credentialId',
+	'refreshIntervalMinutes',
+	'accounts',
+]);
 const PLAINTEXT_CREDENTIAL_FIELDS = new Set([
 	'login',
 	'password',
@@ -17,12 +44,11 @@ const PLAINTEXT_CREDENTIAL_FIELDS = new Set([
 	'token',
 	'secret',
 ]);
-const ALLOWED_ACCOUNT_FIELDS = new Set(['id', 'displayName', 'schoolId', 'enabled', 'credentialId']);
 
 /**
  * Validates the settings used by the adapter before startup.
  *
- * @param config Partial configuration to support instances without the newer settings yet
+ * @param config Partial configuration to support instances without configured account details
  */
 export function validateAdapterConfig(config: Partial<ioBroker.AdapterConfig>): string[] {
 	const errors: string[] = [];
@@ -40,53 +66,57 @@ export function validateAdapterConfig(config: Partial<ioBroker.AdapterConfig>): 
 		);
 	}
 
-	const accounts = config.accounts === undefined ? [] : config.accounts;
-	if (!Array.isArray(accounts)) {
-		return [...errors, 'accounts must be an array'];
+	if (
+		Object.prototype.hasOwnProperty.call(config, 'accounts') &&
+		(!Array.isArray(config.accounts) || config.accounts.length > 0)
+	) {
+		errors.push(
+			'non-empty accounts is no longer supported; configure exactly one Schulportal Hessen account per adapter instance and add another adapter instance for each additional account',
+		);
+		return errors;
 	}
 
-	const accountIds = new Set<string>();
-	for (const [index, account] of accounts.entries()) {
-		const prefix = `accounts[${index}]`;
-		if (typeof account !== 'object' || account === null || Array.isArray(account)) {
-			errors.push(`${prefix} must be an object`);
-			continue;
+	for (const field of Object.keys(config)) {
+		if (PLAINTEXT_CREDENTIAL_FIELDS.has(field.toLowerCase())) {
+			errors.push(`${field} must not be stored in adapter configuration; use a central credential reference`);
+		} else if (!ALLOWED_CONFIG_FIELDS.has(field)) {
+			errors.push(`${field} is not a supported adapter setting`);
 		}
+	}
 
-		for (const field of Object.keys(account)) {
-			if (!ALLOWED_ACCOUNT_FIELDS.has(field)) {
-				errors.push(`${prefix}.${field} is not a supported account setting`);
-				if (PLAINTEXT_CREDENTIAL_FIELDS.has(field.toLowerCase())) {
-					errors.push(`${prefix} must reference central credentials instead of storing login or password fields`);
-				}
-			}
-		}
+	if (config.accountName !== undefined && typeof config.accountName !== 'string') {
+		errors.push('accountName must be a string');
+	}
+	if (
+		config.schoolSearch !== undefined &&
+		(typeof config.schoolSearch !== 'string' || config.schoolSearch.length > 100)
+	) {
+		errors.push('schoolSearch must be a string of at most 100 characters');
+	}
+	if (config.schoolId !== undefined && typeof config.schoolId !== 'string') {
+		errors.push('schoolId must be a string');
+	}
+	if (config.credentialId !== undefined && typeof config.credentialId !== 'string') {
+		errors.push('credentialId must be a string');
+	}
 
-		if (typeof account.id !== 'string' || !ACCOUNT_ID_PATTERN.test(account.id)) {
-			errors.push(`${prefix}.id must be an opaque UUID`);
-		} else if (accountIds.has(account.id.toLowerCase())) {
-			errors.push(`${prefix}.id must be unique`);
-		} else {
-			accountIds.add(account.id.toLowerCase());
-		}
+	const accountName = typeof config.accountName === 'string' ? config.accountName.trim() : '';
+	const schoolId = typeof config.schoolId === 'string' ? config.schoolId : '';
+	const credentialId = typeof config.credentialId === 'string' ? config.credentialId : '';
+	const hasSchoolId = schoolId.length > 0;
+	const hasCredentialId = credentialId.length > 0;
 
-		if (typeof account.enabled !== 'boolean') {
-			errors.push(`${prefix}.enabled must be a boolean`);
-		}
-
-		if (account.enabled !== true) {
-			continue;
-		}
-
-		if (typeof account.displayName !== 'string' || account.displayName.trim().length === 0) {
-			errors.push(`${prefix}.displayName is required for enabled accounts`);
-		}
-		if (typeof account.schoolId !== 'string' || account.schoolId.trim().length === 0) {
-			errors.push(`${prefix}.schoolId is required for enabled accounts`);
-		}
-		if (typeof account.credentialId !== 'string' || !account.credentialId.startsWith(CREDENTIALS_PREFIX)) {
-			errors.push(`${prefix}.credentialId must reference a central ioBroker credential`);
-		}
+	if (hasSchoolId !== hasCredentialId) {
+		errors.push(SCHOOL_CREDENTIAL_PAIR_ERROR);
+	}
+	if (accountName && (!hasSchoolId || !hasCredentialId)) {
+		errors.push(ACCOUNT_NAME_REQUIREMENT_ERROR);
+	}
+	if (hasSchoolId && !SCHOOL_ID_PATTERN.test(schoolId)) {
+		errors.push(RECOVERABLE_SCHOOL_ID_ERROR);
+	}
+	if (hasCredentialId && !CENTRAL_CREDENTIAL_ID_PATTERN.test(credentialId)) {
+		errors.push('credentialId must reference a valid central ioBroker credential');
 	}
 
 	return errors;

@@ -1,10 +1,9 @@
 {
 	"schulportal-hessen adapter settings": "schulportal-hessen的适配器设置",
-	"Accounts": "账户",
-	"Internal account ID": "内部账户 ID",
-	"Display name": "显示名称",
-	"School ID": "学校 ID",
-	"Enabled": "已启用",
+	"Account name (optional)": "账户名称（可选）",
+	"Search schools by name, town, or ID": "按学校名称、城镇或 ID 搜索",
+	"Enter at least two characters, then choose a matching school below.": "输入至少两个字符，然后从下方选择匹配的学校。",
+	"Select a matching school": "选择匹配的学校",
 	"Custom login/password credential": "自定义登录凭据（用户名/密码）",
 	"Refresh interval": "刷新间隔"
 }

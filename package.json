@@ -20,10 +20,11 @@
     "url": "https://github.com/Voodoo2man/ioBroker.schulportal-hessen.git"
   },
   "engines": {
-    "node": ">= 20"
+    "node": ">=22"
   },
   "dependencies": {
-    "@iobroker/adapter-core": "^3.4.3"
+    "@iobroker/adapter-core": "^3.4.3",
+    "node-html-parser": "^9.0.7"
   },
   "devDependencies": {
     "@alcalzone/release-script": "^5.2.1",

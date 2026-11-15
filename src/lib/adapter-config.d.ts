@@ -1,6 +1,5 @@
 // This file extends the AdapterConfig type from "@iobroker/types"
 
-// Augment the globally declared type ioBroker.AdapterConfig
 declare global {
 	namespace ioBroker {
 		interface SchulportalHessenAccountConfig {
@@ -12,11 +11,16 @@ declare global {
 		}
 
 		interface AdapterConfig {
-			accounts: SchulportalHessenAccountConfig[];
+			accountName?: string;
+			schoolSearch?: string;
+			schoolId: string;
+			credentialId: string;
 			refreshIntervalMinutes: number;
+			/** @deprecated Legacy configuration is rejected; use one adapter instance per account. */
+			accounts?: SchulportalHessenAccountConfig[];
 		}
 	}
 }
 
-// this is required so the above AdapterConfig is found by TypeScript / type checking
+// This is required so the above AdapterConfig is found by TypeScript / type checking.
 export {};
