@@ -1007,6 +1007,22 @@ describe('parsePortalResource', () => {
 		}
 	});
 
+	it('preserves a lone question mark while filtering query-only URL values', () => {
+		const result = parsePortalResource(
+			'substitutions',
+			JSON.stringify([{ literal: '?', queryOnly: '?view=details' }]),
+			'application/json',
+		);
+
+		expect(result.status).to.equal('complete');
+		if (result.status === 'complete') {
+			expect(result.records[0]?.format).to.equal('json');
+			if (result.records[0]?.format === 'json') {
+				expect(result.records[0].fields).to.deep.equal({ literal: '?' });
+			}
+		}
+	});
+
 	it('derives stable opaque file IDs from normalized content when no data-id exists', () => {
 		const first = parsePortalResource(
 			'file-metadata',

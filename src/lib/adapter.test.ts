@@ -545,7 +545,7 @@ describe('non-compacted resource records', () => {
 		);
 
 		expect(result.success).to.equal(true);
-		const channelId = 'substitutions.exam';
+		const channelId = 'substitutions.undated.portal-record';
 		expect(states.get(`${channelId}.name`)?.val).to.equal('Exam');
 		expect(states.get(`${channelId}.room`)?.val).to.equal('A12');
 		expect(states.get(`${channelId}.confirmed`)?.val).to.equal(false);
@@ -556,6 +556,342 @@ describe('non-compacted resource records', () => {
 			write: false,
 		});
 		expect(objects.has(`${channelId}.record_json`)).to.equal(false);
+	});
+
+	it('adds individual substitution column text states without replacing aggregate fields', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const columns = [
+			{ header: 'Subject', value: 'Mathematics' },
+			{ header: 'Subject!', value: 'English' },
+			{ header: 'Subject', value: 'History' },
+			{ header: '', value: '' },
+		];
+		const record = jsonRecord('substitution-columns', {
+			name: 'Exam',
+			portalDate: '12.11.2026',
+			columns,
+		});
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+
+		const result = await adapter.refreshResource(
+			'substitutions',
+			() => Promise.resolve(response),
+			() => ({ status: 'complete', kind: 'substitutions', records: [record], groups: [] }),
+		);
+
+		expect(result.success).to.equal(true);
+		const sourceId = createHash('sha256').update(record.id).digest('hex');
+		const channelId = `substitutions.${readableRecordPath(states, 'substitutions', sourceId)}`;
+		expect(states.get(`${channelId}.portaldate`)?.val).to.equal('12.11.2026');
+		expect(states.get(`${channelId}.columns`)?.val).to.equal(JSON.stringify(columns));
+		expect(states.get('substitutions.json')?.val).to.equal(JSON.stringify([record]));
+		expect(states.get(`${channelId}.subject`)?.val).to.equal('Mathematics');
+		expect(states.get(`${channelId}.subject_2`)?.val).to.equal('English');
+		expect(states.get(`${channelId}.subject_3`)?.val).to.equal('History');
+		expect(states.get(`${channelId}.column_04`)?.val).to.equal('');
+		for (const [id, name] of [
+			['subject', 'Subject'],
+			['subject_2', 'Subject!'],
+			['subject_3', 'Subject'],
+			['column_04', 'Column 4'],
+		] as const) {
+			expect(objects.get(`${channelId}.${id}`)?.common).to.include({
+				name,
+				type: 'string',
+				role: 'text',
+				read: true,
+				write: false,
+			});
+		}
+	});
+
+	it('publishes read-only daily substitution JSON grouped by verified portal date', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const records = [
+			jsonRecord('daily-1', {
+				portalDate: '12.11.2026',
+				columns: [
+					{ header: '', value: 'must be omitted' },
+					{ header: 'Hinweis', value: '' },
+					{ header: 'Raum', value: 'B12' },
+					{ header: 'Fach', value: 'Mathematics' },
+					{ header: 'Lehrkraft', value: 'Teacher' },
+					{ header: 'Vertretung', value: 'Cover teacher' },
+					{ header: 'Klasse', value: '10A' },
+					{ header: 'Stunde', value: '2' },
+				],
+			}),
+			jsonRecord('daily-2', {
+				portalDate: '13.11.2026',
+				columns: [
+					{ header: 'Stunde', value: '3' },
+					{ header: 'Klasse', value: '9B' },
+					{ header: 'Vertretung', value: 'Room change' },
+					{ header: 'Fach', value: 'Physics' },
+					{ header: 'Raum', value: 'C4' },
+				],
+			}),
+			jsonRecord('daily-unknown-date', { columns: [{ header: 'Fach', value: 'Unassigned' }] }),
+			jsonRecord('daily-invalid-date', {
+				portalDate: '31.02.2026',
+				columns: [{ header: 'Fach', value: 'Invalid date' }],
+			}),
+		];
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+
+		const result = await adapter.refreshResource(
+			'substitutions',
+			() => Promise.resolve(response),
+			() => ({ status: 'complete', kind: 'substitutions', records, groups: [] }),
+		);
+
+		expect(result.success).to.equal(true);
+		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(
+			'[{"Stunde":"2","Klasse":"10A","Vertretung":"Cover teacher","Lehrkraft":"Teacher","Fach":"Mathematics","Raum":"B12","Hinweis":""}]',
+		);
+		expect(states.get('substitutions.2026-11-13.json')?.val).to.equal(
+			'[{"Stunde":"3","Klasse":"9B","Vertretung":"Room change","Lehrkraft":"","Fach":"Physics","Raum":"C4","Hinweis":""}]',
+		);
+		expect(states.get('substitutions.json')?.val).to.equal(JSON.stringify(records));
+		expect(states.get('substitutions.dailyJsonDates')?.val).to.equal('["2026-11-12","2026-11-13"]');
+		expect(objects.get('substitutions.2026-11-12')?.type).to.equal('channel');
+		const firstSourceId = createHash('sha256').update(records[0].id).digest('hex');
+		const secondSourceId = createHash('sha256').update(records[1].id).digest('hex');
+		const unknownSourceId = createHash('sha256').update(records[2].id).digest('hex');
+		const invalidSourceId = createHash('sha256').update(records[3].id).digest('hex');
+		const firstRecordPath = readableRecordPath(states, 'substitutions', firstSourceId);
+		const secondRecordPath = readableRecordPath(states, 'substitutions', secondSourceId);
+		const unknownRecordPath = readableRecordPath(states, 'substitutions', unknownSourceId);
+		const invalidRecordPath = readableRecordPath(states, 'substitutions', invalidSourceId);
+		expect(firstRecordPath).to.match(/^2026-11-12\.portal-record(?:-\d+)?$/u);
+		expect(secondRecordPath).to.match(/^2026-11-13\.portal-record(?:-\d+)?$/u);
+		expect(unknownRecordPath).to.match(/^undated\.portal-record(?:-\d+)?$/u);
+		expect(invalidRecordPath).to.match(/^undated\.portal-record(?:-\d+)?$/u);
+		expect(objects.has(`substitutions.${firstRecordPath}`)).to.equal(true);
+		expect(states.get(`substitutions.${firstRecordPath}.portaldate`)?.val).to.equal('12.11.2026');
+		expect(states.get(`substitutions.${firstRecordPath}.stunde`)?.val).to.equal('2');
+		expect(states.get(`substitutions.${secondRecordPath}.portaldate`)?.val).to.equal('13.11.2026');
+		expect(states.get(`substitutions.${unknownRecordPath}.fach`)?.val).to.equal('Unassigned');
+		expect(states.get(`substitutions.${invalidRecordPath}.fach`)?.val).to.equal('Invalid date');
+		for (const date of ['2026-11-12', '2026-11-13']) {
+			expect(objects.get(`substitutions.${date}.json`)?.common).to.include({
+				type: 'string',
+				role: 'json',
+				read: true,
+				write: false,
+			});
+		}
+		expect(objects.has('substitutions.unknown-date.json')).to.equal(false);
+		expect(objects.has('substitutions.2026-02-31')).to.equal(false);
+	});
+
+	it('preserves daily substitution states on incomplete refreshes and removes stale tracked dates only after completion', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const firstRecords = [
+			jsonRecord('first-date', { portalDate: '12.11.2026', columns: [{ header: 'Stunde', value: '1' }] }),
+			jsonRecord('second-date', { portalDate: '13.11.2026', columns: [{ header: 'Stunde', value: '2' }] }),
+		];
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+		const complete = (records: readonly PortalRecord[]): ReturnType<TestAdapter['refreshResource']> =>
+			adapter.refreshResource(
+				'substitutions',
+				() => Promise.resolve(response),
+				() => ({ status: 'complete', kind: 'substitutions', records, groups: [] }),
+			);
+
+		await complete(firstRecords);
+		const firstDateJson = states.get('substitutions.2026-11-12.json')?.val;
+		const secondDateJson = states.get('substitutions.2026-11-13.json')?.val;
+		const trackedDates = states.get('substitutions.dailyJsonDates')?.val;
+		const firstRecordPath = readableRecordPath(
+			states,
+			'substitutions',
+			createHash('sha256').update(firstRecords[0].id).digest('hex'),
+		);
+		const secondRecordPath = readableRecordPath(
+			states,
+			'substitutions',
+			createHash('sha256').update(firstRecords[1].id).digest('hex'),
+		);
+		const firstRecordChannel = `substitutions.${firstRecordPath}`;
+		const secondRecordChannel = `substitutions.${secondRecordPath}`;
+		const incompleteResponse: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'text/html',
+			body: Buffer.from('<html></html>'),
+		};
+		const incomplete = await adapter.refreshResource(
+			'substitutions',
+			() => Promise.resolve(incompleteResponse),
+			() => ({ status: 'invalid', kind: 'substitutions', reason: 'unexpected-html-structure' }),
+		);
+		const failed = await adapter.refreshResource('substitutions', () =>
+			Promise.resolve({
+				status: 503,
+				classification: 'server-error',
+				contentType: 'text/html',
+				body: Buffer.from('unavailable'),
+			}),
+		);
+
+		expect(incomplete.success).to.equal(false);
+		expect(failed.success).to.equal(false);
+		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(firstDateJson);
+		expect(states.get('substitutions.2026-11-13.json')?.val).to.equal(secondDateJson);
+		expect(states.get('substitutions.dailyJsonDates')?.val).to.equal(trackedDates);
+		expect(objects.has('substitutions.2026-11-12')).to.equal(true);
+		expect(objects.has('substitutions.2026-11-13')).to.equal(true);
+		expect(objects.has(firstRecordChannel)).to.equal(true);
+		expect(objects.has(secondRecordChannel)).to.equal(true);
+
+		await complete([firstRecords[0]]);
+		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(firstDateJson);
+		expect(states.has('substitutions.2026-11-13.json')).to.equal(false);
+		expect(objects.has('substitutions.2026-11-13')).to.equal(false);
+		expect(objects.has(firstRecordChannel)).to.equal(true);
+		expect(objects.has(secondRecordChannel)).to.equal(false);
+		expect(states.get('substitutions.dailyJsonDates')?.val).to.equal('["2026-11-12"]');
+	});
+
+	it('keeps legacy root-level substitution records on failed refreshes and migrates them after a complete refresh', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const record = jsonRecord('legacy-substitution', {
+			portalDate: '12.11.2026',
+			columns: [{ header: 'Fach', value: 'Mathematics' }],
+		});
+		const sourceId = createHash('sha256').update(record.id).digest('hex');
+		const legacyChannel = 'substitutions.legacy-record';
+		objects.set(legacyChannel, {
+			_id: legacyChannel,
+			type: 'channel',
+			common: { name: 'My customized row' },
+			native: { portalRecordDisplayName: 'Generated row', portalRecordFieldIds: ['fach'] },
+		});
+		objects.set(`${legacyChannel}.fach`, {
+			_id: `${legacyChannel}.fach`,
+			type: 'state',
+			common: { name: 'Fach', type: 'string', role: 'text', read: true, write: false },
+			native: { portalRecordFieldDisplayName: 'Fach' },
+		});
+		states.set(`${legacyChannel}.fach`, state('Mathematics'));
+		states.set('substitutions.json', state('[{"id":"previous"}]'));
+		states.set('substitutions.recordIds', state(JSON.stringify([sourceId])));
+		states.set('substitutions.recordPaths', state(JSON.stringify({ [sourceId]: ['legacy-record'] })));
+
+		const incompleteResponse: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'text/html',
+			body: Buffer.from('<html></html>'),
+		};
+		const incomplete = await adapter.refreshResource(
+			'substitutions',
+			() => Promise.resolve(incompleteResponse),
+			() => ({ status: 'invalid', kind: 'substitutions', reason: 'unexpected-html-structure' }),
+		);
+		const failed = await adapter.refreshResource('substitutions', () =>
+			Promise.resolve({
+				status: 503,
+				classification: 'server-error',
+				contentType: 'text/html',
+				body: Buffer.from('unavailable'),
+			}),
+		);
+
+		expect(incomplete.success).to.equal(false);
+		expect(failed.success).to.equal(false);
+		expect(objects.has(legacyChannel)).to.equal(true);
+		expect(states.get(`${legacyChannel}.fach`)?.val).to.equal('Mathematics');
+		expect(objects.has('substitutions.2026-11-12.portal-record')).to.equal(false);
+
+		const originalSetState = adapter.setStateAsync;
+		adapter.setStateAsync = (id, value) =>
+			id === 'substitutions.dailyJsonDates'
+				? Promise.reject(new Error('simulated daily manifest write failure'))
+				: originalSetState(id, value);
+		const failedCommit = await adapter.refreshResource(
+			'substitutions',
+			() =>
+				Promise.resolve({
+					status: 200,
+					classification: 'success',
+					contentType: 'application/json',
+					body: Buffer.from('[]'),
+				}),
+			() => ({ status: 'complete', kind: 'substitutions', records: [record], groups: [] }),
+		);
+		adapter.setStateAsync = originalSetState;
+		expect(failedCommit.success).to.equal(false);
+		expect(objects.has(legacyChannel)).to.equal(true);
+		expect(states.get(`${legacyChannel}.fach`)?.val).to.equal('Mathematics');
+		expect(states.get('substitutions.json')?.val).to.equal('[{"id":"previous"}]');
+
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+		const complete = await adapter.refreshResource(
+			'substitutions',
+			() => Promise.resolve(response),
+			() => ({ status: 'complete', kind: 'substitutions', records: [record], groups: [] }),
+		);
+		const migratedChannel = 'substitutions.2026-11-12.portal-record';
+
+		expect(complete.success).to.equal(true);
+		expect(objects.has(legacyChannel)).to.equal(false);
+		expect(objects.get(migratedChannel)?.common.name).to.equal('My customized row');
+		expect(states.get(`${migratedChannel}.fach`)?.val).to.equal('Mathematics');
+		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(
+			'[{"Stunde":"","Klasse":"","Vertretung":"","Lehrkraft":"","Fach":"Mathematics","Raum":"","Hinweis":""}]',
+		);
+		expect(states.get('substitutions.json')?.val).to.equal(JSON.stringify([record]));
+	});
+
+	it('does not split JSON columns for other record resources', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const columns = [{ header: 'Subject', value: 'Mathematics' }];
+		const record = jsonRecord('learning-group', { name: 'Group', columns });
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+
+		const result = await adapter.refreshResource(
+			'learning-groups',
+			() => Promise.resolve(response),
+			() => ({ status: 'complete', kind: 'learning-groups', records: [record], groups: [] }),
+		);
+
+		expect(result.success).to.equal(true);
+		const sourceId = createHash('sha256').update(record.id).digest('hex');
+		const channelId = `learningGroups.${readableRecordPath(states, 'learningGroups', sourceId)}`;
+		expect(states.get(`${channelId}.columns`)?.val).to.equal(JSON.stringify(columns));
+		expect(objects.has(`${channelId}.subject`)).to.equal(false);
 	});
 });
 
@@ -1070,7 +1406,7 @@ describe('parent child lesson object synchronization', () => {
 });
 
 describe('parent child timetable object synchronization', () => {
-	it('commits today, tomorrow, and rolling-week records under readable child paths with numbered lesson channels', async () => {
+	it('commits timetable records under readable child paths and uses verified period-based lesson channels', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		adapter.getBerlinToday = () => '2026-11-11';
 		const childId = 'a'.repeat(64);
@@ -1084,10 +1420,10 @@ describe('parent child timetable object synchronization', () => {
 			section: 'own',
 			attributes: {},
 			fields: [
-				{ header: 'Stunde', text: '1 (07:45–08:30)', links: [], attributes: {} },
+				{ header: 'Stunde', text: '5 11:25 - 12:10 5.', links: [], attributes: {} },
 				{ header: 'Lesson', text: 'Chemistry', links: [], attributes: {} },
-				{ header: 'Start time', text: '07:45', links: [], attributes: {} },
-				{ header: 'End time', text: '08:30', links: [], attributes: {} },
+				{ header: 'Start time', text: '11:25', links: [], attributes: {} },
+				{ header: 'End time', text: '12:10', links: [], attributes: {} },
 			],
 			context: { childId, timetableWeekday: 'friday' },
 		};
@@ -1145,28 +1481,29 @@ describe('parent child timetable object synchronization', () => {
 			.and.greaterThan(0);
 		expect(JSON.parse(String(states.get(`${timetableBase}.json`)?.val))).to.deep.equal(records);
 
-		const todayLesson = `${timetableBase}.today.lessons.01`;
-		const secondTodayLesson = `${timetableBase}.today.lessons.02`;
-		const tomorrowLesson = `${timetableBase}.tomorrow.lessons.01`;
-		const wednesdayLesson = `${timetableBase}.week.wednesday.lessons.01`;
-		const thursdayLesson = `${timetableBase}.week.thursday.lessons.01`;
-		const movedTuesdayLesson = `${timetableBase}.week.tuesday.lessons.01`;
-		const nextTuesdayLesson = `${timetableBase}.week.tuesday.lessons.02`;
-		const nextMondayLesson = `${timetableBase}.week.monday.lessons.01`;
-		const timedFridayLesson = `${timetableBase}.week.friday.lessons.01`;
+		const todayLesson = `${timetableBase}.today.lessons.lesson_01`;
+		const secondTodayLesson = `${timetableBase}.today.lessons.lesson_02`;
+		const tomorrowLesson = `${timetableBase}.tomorrow.lessons.lesson_01`;
+		const wednesdayLesson = `${timetableBase}.week.wednesday.lessons.lesson_01`;
+		const thursdayLesson = `${timetableBase}.week.thursday.lessons.lesson_01`;
+		const movedTuesdayLesson = `${timetableBase}.week.tuesday.lessons.lesson_01`;
+		const nextTuesdayLesson = `${timetableBase}.week.tuesday.lessons.01`;
+		const nextMondayLesson = `${timetableBase}.week.monday.lessons.lesson_01`;
+		const timedFridayLesson = `${timetableBase}.week.friday.lessons.05`;
 		expect(states.get(`${todayLesson}.subject`)?.val).to.equal('Mathematics');
 		expect(states.get(`${secondTodayLesson}.subject`)?.val).to.equal('Physics');
-		expect(states.get(`${timetableBase}.today.lessons.recordIds`)?.val).to.equal('["01","02"]');
+		expect(states.get(`${timetableBase}.today.lessons.recordIds`)?.val).to.equal('["lesson_01","lesson_02"]');
 		expect(states.get(`${tomorrowLesson}.subject`)?.val).to.equal('Biology');
 		expect(states.get(`${wednesdayLesson}.subject`)?.val).to.equal('Mathematics');
 		expect(states.get(`${thursdayLesson}.subject`)?.val).to.equal('Biology');
 		expect(states.get(`${movedTuesdayLesson}.subject`)?.val).to.equal('Previous Tuesday');
 		expect(states.get(`${nextTuesdayLesson}.subject`)?.val).to.equal('Next Tuesday');
 		expect(states.get(`${nextMondayLesson}.subject`)?.val).to.equal('Next Monday');
-		expect(states.get(`${timedFridayLesson}.stunde`)?.val).to.equal('1 (07:45–08:30)');
+		expect(states.get(`${timedFridayLesson}.stunde`)?.val).to.equal('5');
 		expect(states.get(`${timedFridayLesson}.lesson`)?.val).to.equal('Chemistry');
-		expect(states.get(`${timedFridayLesson}.start_time`)?.val).to.equal('07:45');
-		expect(states.get(`${timedFridayLesson}.end_time`)?.val).to.equal('08:30');
+		expect(states.get(`${timedFridayLesson}.start_time`)?.val).to.equal('11:25');
+		expect(states.get(`${timedFridayLesson}.end_time`)?.val).to.equal('12:10');
+		expect(JSON.parse(String(states.get(`${timetableBase}.json`)?.val))).to.deep.equal(records);
 		for (const [weekday, count] of [
 			['monday', 1],
 			['tuesday', 2],
@@ -1189,12 +1526,137 @@ describe('parent child timetable object synchronization', () => {
 		});
 		expect(JSON.parse(String(states.get(`${timetableBase}.week.tuesday.lessons.recordIds`)?.val))).to.deep.equal([
 			'01',
-			'02',
+			'lesson_01',
 		]);
-		expect(objects.get(nextTuesdayLesson)?.common.name).to.equal('Personal timetable — 1 — Next Tuesday');
 		expect(objects.get(todayLesson)?.type).to.equal('channel');
 		expect(objects.get(todayLesson)?.common.name).to.equal('Custom migrated lesson');
 		expect(objects.has(`${timetableBase}.week`)).to.equal(true);
+	});
+
+	it('strips only the generic prefix from generated personal timetable lesson names', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		adapter.getBerlinToday = () => '2026-11-11';
+		const childId = 'e'.repeat(64);
+		await adapter.commitChildLessons([childWithRecords(childId, 'Student Gamma', [])]);
+		const timetableBase = `${readableChildBase(childId, 'Student Gamma')}.timetable`;
+		const createPersonalRecord = (id: string, period: string, lesson: string): PortalRecord => ({
+			format: 'html',
+			id: `timetable:${id.repeat(64)}`,
+			section: 'own',
+			attributes: {},
+			fields: [
+				{ header: 'Stunde', text: period, links: [], attributes: {} },
+				{ header: 'Lesson', text: lesson, links: [], attributes: {} },
+			],
+			context: { childId, timetableWeekday: 'friday' },
+		});
+		const records = [
+			createPersonalRecord('d', '2 08:35 - 09:20 2.', 'E1 2-206 WRN'),
+			createPersonalRecord('f', '3 09:30 - 10:15 3.', 'Custom lesson'),
+		];
+		const generatedLesson = `${timetableBase}.week.friday.lessons.02`;
+		const customizedLesson = `${timetableBase}.week.friday.lessons.03`;
+		const previousGeneratedName = 'Personal timetable — 3 09:30 - 10:15 3. — Custom lesson';
+		objects.set(customizedLesson, {
+			_id: customizedLesson,
+			type: 'channel',
+			common: { name: 'My customized timetable lesson' },
+			native: {
+				portalRecordDisplayName: previousGeneratedName,
+				portalRecordFieldIds: ['stunde', 'lesson'],
+			},
+		});
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('{}'),
+		};
+
+		const result = await adapter.refreshResource(
+			'timetable',
+			() => Promise.resolve(response),
+			() => ({
+				status: 'complete',
+				kind: 'timetable',
+				records,
+				groups: [],
+				childTimetables: [{ id: childId, records }],
+			}),
+		);
+
+		expect(result.success).to.equal(true);
+		expect(objects.get(generatedLesson)?.common.name).to.equal('2 08:35 - 09:20 2. — E1 2-206 WRN');
+		expect(states.get(`${generatedLesson}.stunde`)?.val).to.equal('2');
+		expect(states.get(`${generatedLesson}.lesson`)?.val).to.equal('E1 2-206 WRN');
+		expect(objects.get(customizedLesson)?.common.name).to.equal('My customized timetable lesson');
+		expect(states.get(`${customizedLesson}.stunde`)?.val).to.equal('3');
+		expect(states.get(`${customizedLesson}.lesson`)?.val).to.equal('Custom lesson');
+	});
+
+	it('retains duplicate and unparseable periods without guessing a period state', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		adapter.getBerlinToday = () => '2026-11-11';
+		const childId = 'c'.repeat(64);
+		await adapter.commitChildLessons([childWithRecords(childId, 'Student Beta', [])]);
+		const childBase = readableChildBase(childId, 'Student Beta');
+		const timetableBase = `${childBase}.timetable`;
+		const makeRecord = (id: string, period: string, lesson: string, start: string, end: string): PortalRecord => ({
+			format: 'html',
+			id: `timetable:${id.repeat(64)}`,
+			section: 'own',
+			attributes: {},
+			fields: [
+				{ header: 'Stunde', text: period, links: [], attributes: {} },
+				{ header: 'Lesson', text: lesson, links: [], attributes: {} },
+				{ header: 'Start time', text: start, links: [], attributes: {} },
+				{ header: 'End time', text: end, links: [], attributes: {} },
+			],
+			context: { childId, timetableWeekday: 'friday' },
+		});
+		const records = [
+			makeRecord('i', '5 11:25 - 12:10 5.', 'Chemistry', '11:25', '12:10'),
+			makeRecord('j', '5 12:15 - 13:00 5.', 'Biology', '12:15', '13:00'),
+			makeRecord('k', 'unknown period', 'Study hall', '13:05', '13:50'),
+			makeRecord('l', '5 14:00 - 14:45 6.', 'Ambiguous period', '14:00', '14:45'),
+		];
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('{}'),
+		};
+
+		const result = await adapter.refreshResource(
+			'timetable',
+			() => Promise.resolve(response),
+			() => ({
+				status: 'complete',
+				kind: 'timetable',
+				records: [],
+				groups: [],
+				childTimetables: [{ id: childId, records }],
+			}),
+		);
+
+		const lessonsBase = `${timetableBase}.week.friday.lessons`;
+		const firstLesson = `${lessonsBase}.05`;
+		const duplicateLesson = `${lessonsBase}.05_2`;
+		const unknownLesson = `${lessonsBase}.lesson_03`;
+		const ambiguousLesson = `${lessonsBase}.lesson_04`;
+		expect(result.success).to.equal(true);
+		expect(states.get(`${lessonsBase}.recordIds`)?.val).to.equal('["05","05_2","lesson_03","lesson_04"]');
+		expect(states.get(`${firstLesson}.stunde`)?.val).to.equal('5');
+		expect(states.get(`${firstLesson}.start_time`)?.val).to.equal('11:25');
+		expect(states.get(`${firstLesson}.end_time`)?.val).to.equal('12:10');
+		expect(states.get(`${duplicateLesson}.stunde`)?.val).to.equal('5');
+		expect(states.get(`${duplicateLesson}.lesson`)?.val).to.equal('Biology');
+		expect(objects.has(`${unknownLesson}.stunde`)).to.equal(false);
+		expect(states.get(`${unknownLesson}.lesson`)?.val).to.equal('Study hall');
+		expect(states.get(`${unknownLesson}.start_time`)?.val).to.equal('13:05');
+		expect(objects.has(`${ambiguousLesson}.stunde`)).to.equal(false);
+		expect(states.get(`${ambiguousLesson}.lesson`)?.val).to.equal('Ambiguous period');
+		expect(JSON.parse(String(states.get(`${timetableBase}.json`)?.val))).to.deep.equal(records);
 	});
 
 	it('keeps confirmed legacy child timetables until complete data is written to the readable path', async () => {
@@ -1275,7 +1737,7 @@ describe('parent child timetable object synchronization', () => {
 		);
 
 		expect(complete.success).to.equal(true);
-		expect(states.get(`${timetableBase}.today.lessons.01.subject`)?.val).to.equal('Mathematics');
+		expect(states.get(`${timetableBase}.today.lessons.lesson_01.subject`)?.val).to.equal('Mathematics');
 		expect(states.get(`${timetableBase}.status`)?.val).to.equal('complete');
 		expect(objects.has(legacyChildBase)).to.equal(false);
 		expect(JSON.parse(String(states.get('students.pendingTimetablePaths')?.val))).to.deep.equal({});

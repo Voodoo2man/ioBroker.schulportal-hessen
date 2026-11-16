@@ -25,6 +25,9 @@ import {
 const STUDENTS_BASE = 'students';
 const INBOX_BASE = 'inbox';
 const INBOX_CATEGORIES = ['read', 'unread'] as const;
+const DAILY_SUBSTITUTION_FIELDS = ['Stunde', 'Klasse', 'Vertretung', 'Lehrkraft', 'Fach', 'Raum', 'Hinweis'] as const;
+type DailySubstitutionField = (typeof DAILY_SUBSTITUTION_FIELDS)[number];
+type DailySubstitutionRow = Record<DailySubstitutionField, string>;
 const ACCOUNT_TYPE_STATE = 'info.accountType';
 const ROOT_LAST_ERROR_STATE = 'info.lastError';
 const RESOURCE_BASES: Record<PortalResourceKind, string> = {
@@ -41,6 +44,78 @@ const RESOURCE_BASES: Record<PortalResourceKind, string> = {
 
 function getResourceBase(resource: PortalResourceKind): string {
 	return RESOURCE_BASES[resource];
+}
+
+function getSubstitutionIsoDate(value: unknown): string | null {
+	if (typeof value !== 'string') {
+		return null;
+	}
+	const match = /^(\d{2})\.(\d{2})\.(\d{4})$/u.exec(value);
+	if (!match) {
+		return null;
+	}
+	const day = Number(match[1]);
+	const month = Number(match[2]);
+	const year = Number(match[3]);
+	const date = new Date(0);
+	date.setUTCFullYear(year, month - 1, day);
+	date.setUTCHours(0, 0, 0, 0);
+	if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+		return null;
+	}
+	return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function isIsoCalendarDate(value: string): boolean {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+	if (!match) {
+		return false;
+	}
+	return getSubstitutionIsoDate(`${match[3]}.${match[2]}.${match[1]}`) === value;
+}
+
+function getSubstitutionRecordDate(record: PortalRecord): string | null {
+	return record.format === 'json' ? getSubstitutionIsoDate(record.fields.portalDate) : null;
+}
+
+function groupDailySubstitutionRows(records: readonly PortalRecord[]): Map<string, DailySubstitutionRow[]> {
+	const groups = new Map<string, DailySubstitutionRow[]>();
+	for (const record of records) {
+		const date = getSubstitutionRecordDate(record);
+		if (!date) {
+			continue;
+		}
+		const dateRows = groups.get(date) ?? [];
+		groups.set(date, dateRows);
+		const columns = record.format === 'json' ? record.fields.columns : undefined;
+		if (!Array.isArray(columns)) {
+			continue;
+		}
+		const row: DailySubstitutionRow = {
+			Stunde: '',
+			Klasse: '',
+			Vertretung: '',
+			Lehrkraft: '',
+			Fach: '',
+			Raum: '',
+			Hinweis: '',
+		};
+		for (const column of columns) {
+			if (typeof column !== 'object' || column === null || Array.isArray(column)) {
+				continue;
+			}
+			const pair = column as Record<string, unknown>;
+			if (typeof pair.header !== 'string' || typeof pair.value !== 'string') {
+				continue;
+			}
+			const header = pair.header.trim();
+			if ((DAILY_SUBSTITUTION_FIELDS as readonly string[]).includes(header)) {
+				row[header as DailySubstitutionField] = pair.value;
+			}
+		}
+		dateRows.push(row);
+	}
+	return groups;
 }
 
 const SCHOOL_OPTIONS_CACHE_MS = 6 * 60 * 60_000;
@@ -370,6 +445,26 @@ interface RecordFieldDescriptor {
 }
 
 const SAFE_READABLE_PATH_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SAFE_READABLE_RECORD_PATH_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
+
+function getSubstitutionRecordPaths(records: readonly PortalRecord[]): Map<string, string> {
+	const entriesByChannel = new Map<string, { sourceId: string; displayName: string }[]>();
+	for (const record of records) {
+		const sourceId = toSafeDynamicRecordId(record.id);
+		const parentChannel = getSubstitutionRecordDate(record) ?? 'undated';
+		const entries = entriesByChannel.get(parentChannel) ?? [];
+		entries.push({ sourceId, displayName: 'portal-record' });
+		entriesByChannel.set(parentChannel, entries);
+	}
+
+	const paths = new Map<string, string>();
+	for (const [parentChannel, entries] of entriesByChannel) {
+		for (const [sourceId, segment] of allocateIdPathSegments(entries)) {
+			paths.set(sourceId, `${parentChannel}.${segment}`);
+		}
+	}
+	return paths;
+}
 
 function allocateSegmentsWithReservations(
 	entries: readonly { sourceId: string; displayName: string }[],
@@ -413,6 +508,69 @@ const COMBINED_LESSON_DETAILS_HEADER = normalizeFieldHeader(
 	'Thema Datum / Inhalt (wenn hinterlegt) / Hausaufgaben (wenn hinterlegt)',
 );
 
+function isTimetablePeriodHeader(header: string): boolean {
+	const normalized = normalizeFieldHeader(header);
+	return normalized === 'stunde' || normalized === 'period';
+}
+
+function getVerifiedTimetablePeriodNumber(value: string): string | null {
+	const normalized = value.replace(/\s+/gu, ' ').trim();
+	const match =
+		/^\s*(\d{1,2})(?:(?:\s*\(\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*\))|(?:\s+((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)(?:\s+(\d{1,2})\.)?))?$/u.exec(
+			normalized,
+		);
+	if (!match) {
+		return null;
+	}
+
+	const period = Number(match[1]);
+	if (!Number.isSafeInteger(period) || period < 1 || (match[6] !== undefined && Number(match[6]) !== period)) {
+		return null;
+	}
+
+	const startTime = match[2] ?? match[4];
+	const endTime = match[3] ?? match[5];
+	if (startTime && endTime) {
+		const [startHour, startMinute] = startTime.split(':').map(Number);
+		const [endHour, endMinute] = endTime.split(':').map(Number);
+		if (
+			startHour === undefined ||
+			startMinute === undefined ||
+			endHour === undefined ||
+			endMinute === undefined ||
+			startHour * 60 + startMinute >= endHour * 60 + endMinute
+		) {
+			return null;
+		}
+	}
+
+	return String(period);
+}
+
+function getRecordTimetablePeriodNumber(record: PortalRecord): string | null {
+	if (record.format !== 'html') {
+		return null;
+	}
+	const periodFields = record.fields.filter(
+		field => typeof field.header === 'string' && isTimetablePeriodHeader(field.header),
+	);
+	return periodFields.length === 1 ? getVerifiedTimetablePeriodNumber(periodFields[0].text) : null;
+}
+
+function getTimetableLessonIds(records: readonly PortalRecord[]): string[] {
+	const occurrences = new Map<string, number>();
+	return records.map((record, index) => {
+		const period = getRecordTimetablePeriodNumber(record);
+		if (period !== null) {
+			const base = period.padStart(2, '0');
+			const occurrence = (occurrences.get(base) ?? 0) + 1;
+			occurrences.set(base, occurrence);
+			return occurrence === 1 ? base : `${base}_${occurrence}`;
+		}
+		return `lesson_${String(index + 1).padStart(2, '0')}`;
+	});
+}
+
 function getFieldId(label: string, index: number, usedIds: Set<string>): string {
 	const base =
 		normalizeFieldLabel(label)
@@ -430,30 +588,41 @@ function getFieldId(label: string, index: number, usedIds: Set<string>): string 
 	return candidate;
 }
 
-function getRecordFieldDescriptors(record: PortalRecord): RecordFieldDescriptor[] {
+function getRecordFieldDescriptors(record: PortalRecord, resource?: PortalResourceKind): RecordFieldDescriptor[] {
 	const usedIds = new Set<string>();
 	if (record.format === 'html') {
-		return record.fields.map((field, index) => {
+		const timetablePeriodNumber = resource === 'timetable' ? getRecordTimetablePeriodNumber(record) : null;
+		return record.fields.flatMap((field, index) => {
 			const originalLabel = field.header;
 			const hasHeader = typeof originalLabel === 'string' && originalLabel.trim().length > 0;
 			const normalizedHeader = hasHeader ? normalizeFieldHeader(originalLabel) : '';
+			const isPeriodField = resource === 'timetable' && hasHeader && isTimetablePeriodHeader(originalLabel);
+			if (isPeriodField && timetablePeriodNumber === null) {
+				return [];
+			}
+			const value = isPeriodField ? timetablePeriodNumber : field.text;
+			if (typeof value !== 'string') {
+				return [];
+			}
 			const name = hasHeader
 				? normalizedHeader === COMBINED_LESSON_DETAILS_HEADER
 					? 'Lesson details'
 					: originalLabel
 				: `Column ${index + 1}`;
 			const fieldIdSource = hasHeader ? originalLabel : `column_${String(index + 1).padStart(2, '0')}`;
-			return {
-				id: getFieldId(fieldIdSource, index, usedIds),
-				name,
-				value: field.text,
-				type: 'string',
-				role: 'text',
-			};
+			return [
+				{
+					id: getFieldId(fieldIdSource, index, usedIds),
+					name,
+					value,
+					type: 'string',
+					role: 'text',
+				},
+			];
 		});
 	}
 
-	return Object.entries(record.fields).map(([key, value], index) => {
+	const descriptors = Object.entries(record.fields).map(([key, value], index) => {
 		let stateValue: string | number | boolean;
 		let type: ioBroker.CommonType;
 		let role: string;
@@ -490,6 +659,31 @@ function getRecordFieldDescriptors(record: PortalRecord): RecordFieldDescriptor[
 			role,
 		};
 	});
+
+	const columns = resource === 'substitutions' ? record.fields.columns : undefined;
+	if (!Array.isArray(columns)) {
+		return descriptors;
+	}
+
+	columns.forEach((column, index) => {
+		if (typeof column !== 'object' || column === null || Array.isArray(column)) {
+			return;
+		}
+		const columnRecord = column as Record<string, unknown>;
+		if (typeof columnRecord.value !== 'string') {
+			return;
+		}
+		const header = typeof columnRecord.header === 'string' ? columnRecord.header : '';
+		const hasHeader = header.trim().length > 0;
+		descriptors.push({
+			id: getFieldId(hasHeader ? header : `column_${String(index + 1).padStart(2, '0')}`, index, usedIds),
+			name: hasHeader ? header : `Column ${index + 1}`,
+			value: columnRecord.value,
+			type: 'string',
+			role: 'text',
+		});
+	});
+	return descriptors;
 }
 
 function getRecordDateFields(record: PortalRecord): string[] | null {
@@ -842,6 +1036,15 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		}
 		await this.ensureState(`${base}.recordIds`, 'Internal record manifest (JSON)', 'string', 'json', '[]');
 		await this.ensureState(`${base}.recordPaths`, 'Internal record path mapping (JSON)', 'string', 'json', '{}');
+		if (resource === 'substitutions' && base === getResourceBase(resource)) {
+			await this.ensureState(
+				`${base}.dailyJsonDates`,
+				'Internal daily substitution JSON date manifest (JSON)',
+				'string',
+				'json',
+				'[]',
+			);
+		}
 	}
 
 	private async ensureChannel(id: string, name: string): Promise<void> {
@@ -1424,7 +1627,8 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				const validPaths = [
 					...new Set(
 						candidates.filter(
-							(path): path is string => typeof path === 'string' && SAFE_READABLE_PATH_PATTERN.test(path),
+							(path): path is string =>
+								typeof path === 'string' && SAFE_READABLE_RECORD_PATH_PATTERN.test(path),
 						),
 					),
 				].sort();
@@ -1601,7 +1805,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 					'[]',
 				);
 				const previousLessonIds = await this.readRecordManifest(`${lessonsBase}.recordIds`);
-				const lessonIds = day.records.map((_, index) => String(index + 1).padStart(2, '0'));
+				const lessonIds = getTimetableLessonIds(day.records);
 				const lessonPlan = planDynamicRecordSync(previousLessonIds, lessonIds, true);
 				if (!lessonPlan) {
 					throw new Error('Could not plan complete timetable lesson update');
@@ -1612,14 +1816,21 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				);
 				for (let index = 0; index < day.records.length; index++) {
 					const record = day.records[index];
-					if (record) {
-						const lessonId = String(index + 1).padStart(2, '0');
+					const lessonId = lessonIds[index];
+					if (record && lessonId) {
 						const recordSourceId = toSafeDynamicRecordId(record.id);
 						const legacyRecordIds = [
 							`${timetableBase}.${recordSourceId}`,
 							`${timetableBase}.records.${recordSourceId}`,
 						];
-						await this.commitRecordChannel(lessonsBase, record, lessonId, legacyRecordIds);
+						await this.commitRecordChannel(
+							lessonsBase,
+							record,
+							lessonId,
+							legacyRecordIds,
+							false,
+							'timetable',
+						);
 					}
 				}
 				pendingCleanup.push({ base: lessonsBase, childId: child.id, ...lessonPlan });
@@ -2013,11 +2224,16 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		recordSegment: string,
 		legacyObjectIds: readonly string[] = [],
 		compact = false,
+		resource?: PortalResourceKind,
 	): Promise<boolean> {
 		const channelId = `${base}.${recordSegment}`;
 		const displayName = getReadableRecordName(record);
+		const generatedDisplayName =
+			resource === 'timetable' && record.format === 'html' && record.section === 'own'
+				? displayName.replace(/^Personal timetable — /u, '')
+				: displayName;
 		const existing = await this.getObjectAsync(channelId);
-		let objectName = displayName;
+		let objectName = generatedDisplayName;
 		if (!existing) {
 			for (const legacyObjectId of legacyObjectIds) {
 				if (legacyObjectId === channelId) {
@@ -2039,7 +2255,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			await this.setObjectNotExistsAsync(channelId, {
 				type: 'channel',
 				common: { name: objectName },
-				native: { portalRecordDisplayName: displayName, portalRecordFieldIds: [] },
+				native: { portalRecordDisplayName: generatedDisplayName, portalRecordFieldIds: [] },
 			});
 		}
 
@@ -2059,7 +2275,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				},
 			];
 		} else {
-			descriptors = getRecordFieldDescriptors(record);
+			descriptors = getRecordFieldDescriptors(record, resource);
 		}
 		for (const descriptor of descriptors) {
 			await this.commitRecordFieldState(`${channelId}.${descriptor.id}`, descriptor);
@@ -2087,13 +2303,13 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			? (getGeneratedObjectNameUpdate(
 					existing.common.name,
 					existing.native?.portalRecordDisplayName,
-					displayName,
-				) ?? (existing.common.name === `Record ${record.id}` ? displayName : null))
+					generatedDisplayName,
+				) ?? (existing.common.name === `Record ${record.id}` ? generatedDisplayName : null))
 			: null;
 		await this.extendObjectAsync(channelId, {
 			...(nameUpdate ? { common: { name: nameUpdate } } : {}),
 			native: {
-				portalRecordDisplayName: displayName,
+				portalRecordDisplayName: generatedDisplayName,
 				portalRecordFieldIds: [...new Set([...currentFieldIds, ...failedFieldDeletions])].sort(),
 			},
 		});
@@ -2171,6 +2387,16 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			return false;
 		}
 		const pathReservations: PathReservation[] = [];
+		const reservedDailyDates =
+			resource === 'substitutions'
+				? new Set([
+						...(await this.readDailySubstitutionDates(`${base}.dailyJsonDates`)),
+						...groupDailySubstitutionRows(records).keys(),
+					])
+				: new Set<string>();
+		for (const date of reservedDailyDates) {
+			pathReservations.push({ ownerId: `daily-json-${date}`, path: date });
+		}
 		for (const sourceId of new Set([...previousIds, ...previousPaths.keys()])) {
 			const paths = previousPaths.get(sourceId) ?? [sourceId];
 			for (const path of paths) {
@@ -2179,11 +2405,24 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				}
 			}
 		}
-		const currentPaths = allocateSegmentsWithReservations(pathEntries, pathReservations);
+		const currentPaths =
+			resource === 'substitutions'
+				? getSubstitutionRecordPaths(records)
+				: allocateSegmentsWithReservations(pathEntries, pathReservations);
 		const currentSegments = new Set(currentPaths.values());
 		const dataJson = JSON.stringify(records);
 		if (typeof dataJson !== 'string') {
 			throw new Error('Invalid JSON data');
+		}
+
+		if (resource === 'substitutions') {
+			const parentChannels = new Set([...currentPaths.values()].map(path => path.split('.')[0]));
+			for (const parentChannel of parentChannels) {
+				await this.ensureChannel(
+					`${base}.${parentChannel}`,
+					parentChannel === 'undated' ? 'Undated substitutions' : parentChannel,
+				);
+			}
 		}
 
 		await this.setAckState(manifestId, JSON.stringify([...new Set([...previousIds, ...plan.currentIds])].sort()));
@@ -2209,7 +2448,11 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 					recordPath,
 					[...new Set(legacyObjectIds)],
 					isCompactRecordResource(resource),
+					resource,
 				)) || cleanupPending;
+		}
+		if (resource === 'substitutions') {
+			cleanupPending = (await this.commitDailySubstitutionJson(records)) || cleanupPending;
 		}
 		await this.setAckState(`${base}.json`, dataJson);
 		if (resource === 'messages') {
@@ -2225,7 +2468,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				oldPaths.add(sourceId);
 			}
 			for (const oldPath of oldPaths) {
-				if (currentSegments.has(oldPath)) {
+				if (currentSegments.has(oldPath) || reservedDailyDates.has(oldPath)) {
 					continue;
 				}
 				let failed = false;
@@ -2264,6 +2507,59 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			JSON.stringify([...new Set([...plan.currentIds, ...staleIdsPendingCleanup])].sort()),
 		);
 		return cleanupPending;
+	}
+
+	private async commitDailySubstitutionJson(records: readonly PortalRecord[]): Promise<boolean> {
+		const base = getResourceBase('substitutions');
+		const manifestId = `${base}.dailyJsonDates`;
+		const previousDates = await this.readDailySubstitutionDates(manifestId);
+		const groups = groupDailySubstitutionRows(records);
+		const currentDates = [...groups.keys()].sort();
+		for (const date of currentDates) {
+			const channelId = `${base}.${date}`;
+			await this.ensureChannel(channelId, date);
+			const stateId = `${channelId}.json`;
+			await this.ensureState(stateId, `Substitutions for ${date} (JSON)`, 'string', 'json', '[]');
+			const dataJson = JSON.stringify(groups.get(date));
+			if (typeof dataJson !== 'string') {
+				throw new Error('Invalid daily substitution JSON');
+			}
+			await this.setAckState(stateId, dataJson);
+		}
+
+		const currentDateSet = new Set(currentDates);
+		const failedDeletions: string[] = [];
+		for (const date of previousDates) {
+			if (currentDateSet.has(date)) {
+				continue;
+			}
+			try {
+				await this.delObjectAsync(`${base}.${date}`, { recursive: true });
+			} catch {
+				failedDeletions.push(date);
+			}
+		}
+		await this.setAckState(manifestId, JSON.stringify([...new Set([...currentDates, ...failedDeletions])].sort()));
+		return failedDeletions.length > 0;
+	}
+
+	private async readDailySubstitutionDates(id: string): Promise<string[]> {
+		const state = await this.getStateAsync(id);
+		if (typeof state?.val !== 'string') {
+			return [];
+		}
+		try {
+			const value: unknown = JSON.parse(state.val);
+			return Array.isArray(value)
+				? [
+						...new Set(
+							value.filter((date): date is string => typeof date === 'string' && isIsoCalendarDate(date)),
+						),
+					].sort()
+				: [];
+		} catch {
+			return [];
+		}
 	}
 
 	private async readRecordManifest(id: string): Promise<string[]> {

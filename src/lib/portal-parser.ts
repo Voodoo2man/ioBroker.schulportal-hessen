@@ -528,7 +528,7 @@ function looksLikeUrl(value: string): boolean {
 		value.startsWith('./') ||
 		value.startsWith('../') ||
 		/^[a-z][a-z\d+.-]*:/iu.test(value) ||
-		value.startsWith('?') ||
+		(value.startsWith('?') && value.length > 1) ||
 		/^[^ ]+\?[^ ]*=/u.test(value)
 	);
 }

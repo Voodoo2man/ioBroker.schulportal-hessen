@@ -351,11 +351,11 @@ describe('createPortalResourceRequests', () => {
 		expect(response?.classification).to.equal('forbidden');
 	});
 
-	it('uses server-rendered substitution tables before issuing per-day requests', async () => {
+	it('preserves literal question marks in server-rendered substitutions without day requests', async () => {
 		const requests: string[] = [];
 		const listing =
 			'<button data-tag="12_11_2026"></button><button data-tag="13_11_2026"></button>' +
-			'<table id="vtable12_11_2026"><thead><tr><th></th><th>Stunde</th><th>Klasse</th><th>Vertretung</th><th>Lehrkraft</th><th>Fach</th><th>Raum</th><th>Hinweis</th></tr></thead><tbody><tr><td></td><td>1</td><td>5a</td><td>Lesson A</td><td>Teacher A</td><td>Math</td><td>Room 1</td><td></td></tr></tbody></table>' +
+			'<table id="vtable12_11_2026"><thead><tr><th></th><th>Stunde</th><th>Klasse</th><th>Vertretung</th><th>Lehrkraft</th><th>Fach</th><th>Raum</th><th>Hinweis</th></tr></thead><tbody><tr><td></td><td>1</td><td>5a</td><td>Lesson A</td><td>Teacher A</td><td>Math</td><td>Room 1</td><td>?</td></tr></tbody></table>' +
 			'<table id="vtable13_11_2026"><thead><tr><th></th><th>Stunde</th><th>Klasse</th><th>Vertretung</th><th>Lehrkraft</th><th>Fach</th><th>Raum</th><th>Hinweis</th></tr></thead><tbody><tr><td></td><td>2</td><td>5b</td><td>Lesson B</td><td>Teacher B</td><td>English</td><td>Room 2</td><td></td></tr></tbody></table>';
 		const reader: PortalReader = {
 			get: path => {
@@ -388,6 +388,13 @@ describe('createPortalResourceRequests', () => {
 			expect(
 				parsed.records.map(record => (record.format === 'json' ? record.fields.portalDate : undefined)),
 			).to.deep.equal(['12.11.2026', '13.11.2026']);
+			const questionMarkRecord = parsed.records.find(
+				record => record.format === 'json' && record.fields.portalDate === '12.11.2026',
+			);
+			expect(questionMarkRecord?.format).to.equal('json');
+			if (questionMarkRecord?.format === 'json') {
+				expect(questionMarkRecord.fields.columns).to.deep.include({ header: 'Hinweis', value: '?' });
+			}
 		}
 	});
 
