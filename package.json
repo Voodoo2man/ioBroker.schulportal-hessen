@@ -4,7 +4,7 @@
   "description": "Adapter for the Schulportal Hessen school portal",
   "author": {
     "name": "Voodoo2man",
-    "email": "62031459+Voodoo2man@users.noreply.github.com"
+    "email": "Voodoo2man@outlook.de"
   },
   "contributors": [],
   "homepage": "https://github.com/Voodoo2man/ioBroker.schulportal-hessen",
@@ -20,7 +20,7 @@
     "url": "https://github.com/Voodoo2man/ioBroker.schulportal-hessen.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@iobroker/adapter-core": "^3.4.3",

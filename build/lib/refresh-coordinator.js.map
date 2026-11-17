@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../src/lib/refresh-coordinator.ts"],
+  "sourcesContent": ["/** Coalesces concurrent triggers into one running refresh. */\nexport class RefreshCoordinator {\n\tprivate active: Promise<void> | null = null;\n\n\t/**\n\t * Run the operation once and share its promise with concurrent callers.\n\t *\n\t * @param operation Work to run after the current operation settles.\n\t */\n\trun(operation: () => Promise<void>): Promise<void> {\n\t\tif (this.active) {\n\t\t\treturn this.active;\n\t\t}\n\n\t\tconst running = Promise.resolve().then(operation);\n\t\tthis.active = running;\n\t\tvoid running\n\t\t\t.finally(() => {\n\t\t\t\tif (this.active === running) {\n\t\t\t\t\tthis.active = null;\n\t\t\t\t}\n\t\t\t})\n\t\t\t.catch(() => undefined);\n\t\treturn running;\n\t}\n}\n"],
+  "mappings": ";;;;;;;;;;;;;;;;;;AAAA;AAAA;AAAA;AAAA;AAAA;AACO,MAAM,mBAAmB;AAAA,EACvB,SAA+B;AAAA;AAAA;AAAA;AAAA;AAAA;AAAA,EAOvC,IAAI,WAA+C;AAClD,QAAI,KAAK,QAAQ;AAChB,aAAO,KAAK;AAAA,IACb;AAEA,UAAM,UAAU,QAAQ,QAAQ,EAAE,KAAK,SAAS;AAChD,SAAK,SAAS;AACd,SAAK,QACH,QAAQ,MAAM;AACd,UAAI,KAAK,WAAW,SAAS;AAC5B,aAAK,SAAS;AAAA,MACf;AAAA,IACD,CAAC,EACA,MAAM,MAAM,MAAS;AACvB,WAAO;AAAA,EACR;AACD;",
+  "names": []
+}

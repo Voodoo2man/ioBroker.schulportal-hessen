@@ -20,7 +20,11 @@ const moduleLoader = Module as unknown as {
 const originalLoad = moduleLoader._load;
 moduleLoader._load = function (request, parent, isMain) {
 	if (request === '@iobroker/adapter-core') {
-		return { Adapter: class {} };
+		return {
+			Adapter: class {
+				on(): void {}
+			},
+		};
 	}
 	return originalLoad.call(Module, request, parent, isMain);
 };
@@ -33,8 +37,20 @@ try {
 const { SchulportalHessenAdapter } = adapterModule;
 
 interface TestAdapter {
-	config: { schoolId: string; credentialId: string };
+	config: Pick<ioBroker.AdapterConfig, 'schoolId' | 'credentialId' | 'accountName'> & {
+		refreshIntervalMinutes?: number;
+	};
+	namespace: string;
+	onReady(): Promise<void>;
+	onUnload(callback: () => void): Promise<void>;
+	refreshAccount(): Promise<void>;
+	setTimeout(callback: () => void, delay: number): ioBroker.Timeout;
+	clearTimeout(timer: ioBroker.Timeout): void;
+	subscribeStates(id: string): void;
+	terminate(reason: string, code: number): void;
 	log: { debug(message: string): void; warn(message: string): void; error(message: string): void };
+	onStateChange(id: string, state: ioBroker.State | null | undefined): void;
+	requestRefresh(): Promise<void>;
 	getObjectAsync(id: string): Promise<ioBroker.Object | null | undefined>;
 	setObjectNotExistsAsync(id: string, object: ioBroker.SettableObject): Promise<void>;
 	extendObjectAsync(id: string, object: ioBroker.PartialObject): Promise<void>;
@@ -63,8 +79,8 @@ function makeTestAdapter(): {
 	objects: Map<string, StoredObject>;
 	states: Map<string, ioBroker.State>;
 } {
-	const adapter = Object.create(SchulportalHessenAdapter.prototype) as TestAdapter;
-	adapter.config = { schoolId: '5202', credentialId: 'test-credential' };
+	const adapter = new SchulportalHessenAdapter() as unknown as TestAdapter;
+	adapter.config = { schoolId: '5202', credentialId: 'system.credentials.test-credential' };
 	adapter.log = { debug: () => undefined, warn: () => undefined, error: () => undefined };
 	const objects = new Map<string, StoredObject>();
 	const states = new Map<string, ioBroker.State>();
@@ -210,6 +226,131 @@ function readableRecordPath(states: Map<string, ioBroker.State>, base: string, s
 	return path ?? '';
 }
 
+describe('manual refresh state', () => {
+	it('accepts a fully qualified refresh ID and refreshes only for an unacknowledged true value', () => {
+		const { adapter, states } = makeTestAdapter();
+		adapter.namespace = 'schulportal-hessen.0';
+		let refreshRequests = 0;
+		adapter.requestRefresh = () => {
+			refreshRequests++;
+			return Promise.resolve();
+		};
+		const id = `${adapter.namespace}.info.refresh`;
+
+		adapter.onStateChange(id, { val: false, ack: false } as ioBroker.State);
+		adapter.onStateChange(id, { val: true, ack: true } as ioBroker.State);
+		adapter.onStateChange(id, { val: true, ack: false } as ioBroker.State);
+
+		expect(refreshRequests).to.equal(1);
+		expect(states.get('info.refresh')).to.deep.include({ val: false, ack: true });
+		expect(states.has(`${id}`)).to.equal(false);
+	});
+});
+
+function makePollingAdapter(): ReturnType<typeof makeTestAdapter> & {
+	timers: Map<ioBroker.Timeout, { callback: () => void; delay: number }>;
+} {
+	const harness = makeTestAdapter();
+	const { adapter } = harness;
+	const timers = new Map<ioBroker.Timeout, { callback: () => void; delay: number }>();
+	adapter.setTimeout = (callback, delay) => {
+		const timer = {} as ioBroker.Timeout;
+		timers.set(timer, { callback, delay });
+		return timer;
+	};
+	adapter.clearTimeout = timer => {
+		timers.delete(timer);
+	};
+	adapter.subscribeStates = () => undefined;
+	adapter.terminate = () => {
+		throw new Error('Adapter unexpectedly terminated');
+	};
+	return { ...harness, timers };
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void; reject(error: Error): void } {
+	let resolve!: () => void;
+	let reject!: (error: Error) => void;
+	const promise = new Promise<void>((done, fail) => {
+		resolve = done;
+		reject = fail;
+	});
+	return { promise, resolve, reject };
+}
+
+describe('completion-based refresh scheduling', () => {
+	it('starts a new full interval only after startup, manual and scheduled refreshes settle', async () => {
+		const { adapter, timers } = makePollingAdapter();
+		adapter.config.refreshIntervalMinutes = 5;
+		const starts = [deferred(), deferred(), deferred()];
+		const finishes = [deferred(), deferred(), deferred()];
+		let runs = 0;
+		adapter.refreshAccount = () => {
+			const run = runs++;
+			starts[run].resolve();
+			return finishes[run].promise;
+		};
+
+		const ready = adapter.onReady();
+		await starts[0].promise;
+		expect(timers.size).to.equal(0);
+		finishes[0].reject(new Error('Initial refresh failed'));
+		await ready;
+		expect([...timers.values()].map(timer => timer.delay)).to.deep.equal([300_000]);
+		const [initialTimer] = timers.keys();
+
+		adapter.onStateChange('info.refresh', { val: true, ack: false } as ioBroker.State);
+		await starts[1].promise;
+		expect(timers.size).to.equal(0);
+		const manual = adapter.requestRefresh();
+		expect(adapter.requestRefresh()).to.equal(manual);
+		finishes[1].resolve();
+		await manual;
+		expect([...timers.values()].map(timer => timer.delay)).to.deep.equal([300_000]);
+		const [[scheduledTimer, scheduled]] = [...timers];
+		expect(scheduledTimer).not.to.equal(initialTimer);
+		timers.delete(scheduledTimer);
+		scheduled.callback();
+		await starts[2].promise;
+		expect(timers.size).to.equal(0);
+		const running = adapter.requestRefresh();
+		finishes[2].resolve();
+		await running;
+		expect(runs).to.equal(3);
+		expect([...timers.values()].map(timer => timer.delay)).to.deep.equal([300_000]);
+		await adapter.onUnload(() => undefined);
+		expect(timers.size).to.equal(0);
+	});
+
+	it('does not rearm when unloaded during a refresh or when no account is configured', async () => {
+		const { adapter, timers } = makePollingAdapter();
+		const started = deferred();
+		const finished = deferred();
+		adapter.refreshAccount = () => {
+			started.resolve();
+			return finished.promise;
+		};
+		const ready = adapter.onReady();
+		await started.promise;
+		let unloads = 0;
+		const unloaded = adapter.onUnload(() => {
+			unloads++;
+		});
+		expect(unloads).to.equal(0);
+		finished.resolve();
+		await Promise.all([ready, unloaded]);
+		await adapter.requestRefresh();
+		expect(unloads).to.equal(1);
+		expect(timers.size).to.equal(0);
+
+		const unconfigured = makePollingAdapter();
+		unconfigured.adapter.config = { schoolId: '', credentialId: '' };
+		await unconfigured.adapter.onReady();
+		await unconfigured.adapter.requestRefresh();
+		expect(unconfigured.timers.size).to.equal(0);
+	});
+});
+
 describe('new root object tree', () => {
 	it('creates the requested top-level paths without creating account objects', async () => {
 		const { adapter, objects } = makeTestAdapter();
@@ -238,6 +379,18 @@ describe('new root object tree', () => {
 		}
 		expect(objects.has('account')).to.equal(false);
 		expect(objects.has('account.info.schoolId')).to.equal(false);
+	});
+
+	it('publishes only the optional configured account display name and clears a stale value', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		adapter.config.accountName = '  Familienkonto  ';
+		await adapter.createObjectTree();
+		expect(objects.get('info.accountName')?.common).to.include({ type: 'string', read: true, write: false });
+		expect(states.get('info.accountName')).to.deep.include({ val: 'Familienkonto', ack: true });
+
+		delete adapter.config.accountName;
+		await adapter.createObjectTree();
+		expect(states.get('info.accountName')).to.deep.include({ val: '', ack: true });
 	});
 
 	it('maps verified profile labels and account type to the root summary states', async () => {
@@ -480,6 +633,230 @@ describe('compact resource records', () => {
 		});
 	}
 
+	it('repairs existing record channels missing type or common before writing fields', async () => {
+		for (const testCase of [
+			{ common: undefined, expectedName: 'Annual report' },
+			{ common: { name: 'Custom report label' }, expectedName: 'Custom report label' },
+			{
+				common: { name: { en: 'My report', de: 'Mein Bericht' } },
+				expectedName: { en: 'My report', de: 'Mein Bericht' },
+			},
+		]) {
+			const { adapter, objects, states } = makeTestAdapter();
+			await adapter.createObjectTree();
+			const record = jsonRecord('corrupt-existing-record', { name: 'Annual report', size: 1024 });
+			const sourceId = createHash('sha256').update(record.id).digest('hex');
+			const channelId = 'files.annual-report';
+			const existingChannel = {
+				_id: channelId,
+				native: { portalRecordFieldIds: ['record_json'] },
+				...(testCase.common ? { common: testCase.common } : {}),
+			};
+			objects.set(channelId, existingChannel as unknown as StoredObject);
+			const recordJsonId = `${channelId}.record_json`;
+			objects.set(recordJsonId, {
+				_id: recordJsonId,
+				type: 'state',
+				common: { name: 'Complete record (JSON)', type: 'string', role: 'json', read: true, write: false },
+				native: { portalRecordFieldDisplayName: 'Complete record (JSON)' },
+			});
+			states.set(recordJsonId, state('stale record'));
+			const originalSetState = adapter.setStateAsync;
+			adapter.setStateAsync = (id, value) => {
+				if (id === recordJsonId) {
+					expect(objects.get(channelId)?.type).to.equal('channel');
+					expect(objects.get(channelId)?.common.name).to.deep.equal(testCase.expectedName);
+				}
+				return originalSetState(id, value);
+			};
+			const response: PortalResponse = {
+				status: 200,
+				classification: 'success',
+				contentType: 'application/json',
+				body: Buffer.from('[]'),
+			};
+
+			const result = await adapter.refreshResource(
+				'file-metadata',
+				() => Promise.resolve(response),
+				() => ({ status: 'complete', kind: 'file-metadata', records: [record], groups: [] }),
+			);
+
+			expect(result.success).to.equal(true);
+			expect(objects.get(channelId)?.type).to.equal('channel');
+			expect(objects.get(channelId)?.common.name).to.deep.equal(testCase.expectedName);
+			expect(objects.get(channelId)?.native.portalRecordFieldIds).to.deep.equal(['record_json']);
+			expect(states.get(recordJsonId)?.val).to.equal(JSON.stringify(record));
+			expect(states.get('files.recordIds')?.val).to.equal(JSON.stringify([sourceId]));
+		}
+	});
+
+	it('allocates records away from fixed resource states and protects those objects during cleanup', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const base = 'files';
+		const names = ['status', 'STATUS', 'count', 'lastUpdate', 'json', 'recordIds', 'recordPaths', 'records'];
+		const records = names.map((name, index) => jsonRecord(`reserved-${index}`, { name, marker: index }));
+		const sourceIds = records.map(record => createHash('sha256').update(record.id).digest('hex'));
+		const previousPaths = Object.fromEntries(
+			records.map((_, index) => [sourceIds[index], [names[index]?.toLowerCase() ?? '']]),
+		);
+		states.set(`${base}.recordIds`, state(JSON.stringify(sourceIds)));
+		states.set(`${base}.recordPaths`, state(JSON.stringify(previousPaths)));
+		objects.set(`${base}.records`, {
+			_id: `${base}.records`,
+			type: 'channel',
+			common: { name: 'Legacy records' },
+			native: {},
+		});
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+
+		const result = await adapter.refreshResource(
+			'file-metadata',
+			() => Promise.resolve(response),
+			() => ({ status: 'complete', kind: 'file-metadata', records, groups: [] }),
+		);
+
+		expect(result.success).to.equal(true);
+		expect(states.get(`${base}.status`)?.val).to.equal('complete');
+		expect(states.get(`${base}.count`)?.val).to.equal(records.length);
+		expect(states.get(`${base}.lastUpdate`)?.val)
+			.to.be.a('number')
+			.and.greaterThan(0);
+		expect(states.get(`${base}.json`)?.val).to.equal(JSON.stringify(records));
+		expect(JSON.parse(String(states.get(`${base}.recordIds`)?.val))).to.deep.equal([...sourceIds].sort());
+		const currentPaths = JSON.parse(String(states.get(`${base}.recordPaths`)?.val)) as Record<string, string[]>;
+		const reservedPaths = new Set(names.map(name => name.toLowerCase()));
+		for (const [index, record] of records.entries()) {
+			const sourceId = sourceIds[index];
+			const recordPath = sourceId ? currentPaths[sourceId]?.[0] : undefined;
+			expect(recordPath).to.be.a('string');
+			expect(reservedPaths.has(recordPath?.toLowerCase() ?? '')).to.equal(false);
+			const channelId = `${base}.${recordPath}`;
+			expect(objects.get(channelId)?.type).to.equal('channel');
+			expect(states.get(`${channelId}.record_json`)?.val).to.equal(JSON.stringify(record));
+		}
+		for (const fixedName of ['status', 'count', 'lastUpdate', 'json', 'recordIds', 'recordPaths']) {
+			expect(objects.get(`${base}.${fixedName}`)?.type, fixedName).to.equal('state');
+			expect(objects.has(`${base}.${fixedName}.record_json`), fixedName).to.equal(false);
+		}
+		expect(objects.has(`${base}.records`)).to.equal(false);
+		const firstPathMapping = states.get(`${base}.recordPaths`)?.val;
+		const repeated = await adapter.refreshResource(
+			'file-metadata',
+			() => Promise.resolve(response),
+			() => ({ status: 'complete', kind: 'file-metadata', records, groups: [] }),
+		);
+		expect(repeated.success).to.equal(true);
+		expect(states.get(`${base}.recordPaths`)?.val).to.equal(firstPathMapping);
+	});
+
+	it('retries only owned tracked fields left under a colliding fixed state', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const fixedId = 'files.status';
+		const fieldId = `${fixedId}.record_json`;
+		const sourceId = 'legacy-status';
+		const fixed = objects.get(fixedId)!;
+		fixed.native.portalRecordFieldIds = ['record_json', 'manual', 'folder', 'folder.nested'];
+		states.set('files.recordIds', state(JSON.stringify([sourceId])));
+		states.set('files.recordPaths', state(JSON.stringify({ [sourceId]: ['status', 'status.manual'] })));
+		for (const [suffix, type, owned] of [
+			['record_json', 'state', true],
+			['record_json.user', 'state', false],
+			['manual', 'state', false],
+			['untracked', 'state', true],
+			['folder', 'channel', true],
+			['folder.nested', 'state', true],
+		] as const) {
+			const id = `${fixedId}.${suffix}`;
+			objects.set(id, {
+				_id: id,
+				type,
+				common: { name: suffix },
+				native: owned ? { portalRecordFieldDisplayName: suffix } : {},
+			});
+			if (type === 'state') {
+				states.set(id, state(suffix));
+			}
+		}
+		const originalDelete = adapter.delObjectAsync;
+		let failures = 0;
+		adapter.delObjectAsync = (id, options) => {
+			if (id === fieldId) {
+				expect(options?.recursive).not.to.equal(true);
+				if (failures++ === 0) {
+					return Promise.reject(new Error('Temporary delete failure'));
+				}
+			}
+			return originalDelete(id, options);
+		};
+		const refresh = (): ReturnType<TestAdapter['refreshResource']> =>
+			adapter.refreshResource(
+				'file-metadata',
+				() =>
+					Promise.resolve({
+						status: 200,
+						classification: 'success',
+						contentType: 'application/json',
+						body: Buffer.from('[]'),
+					}),
+				() => ({ status: 'complete', kind: 'file-metadata', records: [], groups: [] }),
+			);
+
+		expect(await refresh()).to.deep.equal({ success: true, degraded: true, status: 'complete-cleanup-pending' });
+		expect(states.get('files.recordIds')?.val).to.equal(JSON.stringify([sourceId]));
+		expect(states.get('files.recordPaths')?.val).to.equal(JSON.stringify({ [sourceId]: ['status'] }));
+		expect(objects.has(fieldId)).to.equal(true);
+
+		expect(await refresh()).to.deep.equal({ success: true, degraded: false, status: 'complete' });
+		expect(states.get('files.recordIds')?.val).to.equal('[]');
+		expect(states.get('files.recordPaths')?.val).to.equal('{}');
+		expect(objects.has(fieldId)).to.equal(false);
+		expect(states.has(fieldId)).to.equal(false);
+		expect(objects.get(fixedId)?.type).to.equal('state');
+		expect(states.get(fixedId)?.val).to.equal('complete');
+		for (const suffix of ['record_json.user', 'manual', 'untracked', 'folder', 'folder.nested']) {
+			expect(objects.has(`${fixedId}.${suffix}`), suffix).to.equal(true);
+		}
+	});
+
+	it('cleans tracked legacy fields from a fixed lesson section without deleting its status', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const student = childWithRecords('a'.repeat(64), 'Learner', [], ['attendance']);
+		await adapter.commitChildLessons([student]);
+		const base = 'students.learner.lessons';
+		const section = `${base}.attendance`;
+		const legacyField = `${section}.anwesend`;
+		const status = `${section}.status`;
+		objects.get(section)!.native.portalRecordFieldIds = ['anwesend', 'status'];
+		objects.get(status)!.native.portalRecordFieldDisplayName = 'Old colliding label';
+		objects.set(legacyField, {
+			_id: legacyField,
+			type: 'state',
+			common: { name: 'Anwesend' },
+			native: { portalRecordFieldDisplayName: 'Anwesend' },
+		});
+		states.set(legacyField, state('Yes'));
+		states.set(`${base}.recordIds`, state('["legacy-attendance"]'));
+		states.set(`${base}.recordPaths`, state('{"legacy-attendance":["attendance"]}'));
+
+		await adapter.commitChildLessons([student]);
+
+		expect(objects.has(legacyField)).to.equal(false);
+		expect(states.has(legacyField)).to.equal(false);
+		expect(objects.get(section)?.type).to.equal('channel');
+		expect(objects.get(status)?.type).to.equal('state');
+		expect(states.get(status)?.val).to.equal('complete');
+		expect(states.get(`${base}.recordPaths`)?.val).to.equal('{}');
+	});
+
 	it('removes only old field objects listed in channel tracking', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		await adapter.createObjectTree();
@@ -527,6 +904,35 @@ describe('compact resource records', () => {
 });
 
 describe('non-compacted resource records', () => {
+	it('uses an English section label without changing the protocol-based channel path or aggregate', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const record: PortalRecord = {
+			format: 'html',
+			id: 'exam-row',
+			section: 'klausuren',
+			attributes: {},
+			fields: [{ header: 'Fach', text: 'Englisch', links: [], attributes: {} }],
+		};
+		const result = await adapter.refreshResource(
+			'learning-groups',
+			() =>
+				Promise.resolve({
+					status: 200,
+					classification: 'success',
+					contentType: 'text/html',
+					body: Buffer.from(''),
+				}),
+			() => ({ status: 'complete', kind: 'learning-groups', records: [record], groups: [] }),
+		);
+
+		expect(result.success).to.equal(true);
+		const channel = 'learningGroups.klausuren-englisch';
+		expect(objects.get(channel)?.common.name).to.equal('Exams — Englisch');
+		expect(states.get(`${channel}.subject`)?.val).to.equal('Englisch');
+		expect(states.get('learningGroups.json')?.val).to.equal(JSON.stringify([record]));
+	});
+
 	it('continues exposing individual typed field states', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		await adapter.createObjectTree();
@@ -611,6 +1017,72 @@ describe('non-compacted resource records', () => {
 		}
 	});
 
+	it('migrates only tracked substitution fields after a complete response and retains custom names', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const columns = [
+			{ header: 'Stunde', value: '03' },
+			{ header: 'Unbekannte Spalte', value: 'Unverändert' },
+		];
+		const record = jsonRecord('migration', { portalDate: '12.11.2026', columns });
+		const channelId = 'substitutions.2026-11-12.portal-record';
+		const legacyFields = [
+			['stunde', 'Stunde', 'Mein Zeitfenster'],
+			['unbekannte_spalte', 'Unbekannte Spalte', 'Unbekannte Spalte'],
+			['untracked', 'Untracked', 'Untracked'],
+		];
+		objects.set(channelId, {
+			_id: channelId,
+			type: 'channel',
+			common: { name: 'Custom substitution' },
+			native: { portalRecordDisplayName: 'Portal record', portalRecordFieldIds: ['stunde', 'unbekannte_spalte'] },
+		});
+		for (const [field, generated, name] of legacyFields) {
+			const id = `${channelId}.${field}`;
+			objects.set(id, {
+				_id: id,
+				type: 'state',
+				common: { name },
+				native: { portalRecordFieldDisplayName: generated },
+			});
+			states.set(id, state(name));
+		}
+		const read = (): Promise<PortalResponse> =>
+			Promise.resolve({
+				status: 200,
+				classification: 'success',
+				contentType: 'application/json',
+				body: Buffer.from('[]'),
+			});
+
+		const incomplete = await adapter.refreshResource('substitutions', read, () => ({
+			status: 'invalid',
+			kind: 'substitutions',
+			reason: 'unexpected-html-structure',
+		}));
+		expect(incomplete.success).to.equal(false);
+		expect(states.has(`${channelId}.stunde`)).to.equal(true);
+		expect(states.has(`${channelId}.unbekannte_spalte`)).to.equal(true);
+		expect(states.has(`${channelId}.period`)).to.equal(false);
+
+		const complete = await adapter.refreshResource('substitutions', read, () => ({
+			status: 'complete',
+			kind: 'substitutions',
+			records: [record],
+			groups: [],
+		}));
+		expect(complete.success).to.equal(true);
+		expect(objects.get(channelId)?.common.name).to.equal('Custom substitution');
+		expect(objects.get(`${channelId}.period`)?.common.name).to.equal('Mein Zeitfenster');
+		expect(states.get(`${channelId}.period`)?.val).to.equal('03');
+		expect(objects.get(`${channelId}.column_02`)?.common.name).to.equal('Column 2');
+		expect(states.get(`${channelId}.column_02`)?.val).to.equal('Unverändert');
+		expect(states.get(`${channelId}.columns`)?.val).to.equal(JSON.stringify(columns));
+		expect(objects.has(`${channelId}.stunde`)).to.equal(false);
+		expect(objects.has(`${channelId}.unbekannte_spalte`)).to.equal(false);
+		expect(objects.has(`${channelId}.untracked`)).to.equal(true);
+	});
+
 	it('publishes read-only daily substitution JSON grouped by verified portal date', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		await adapter.createObjectTree();
@@ -643,6 +1115,10 @@ describe('non-compacted resource records', () => {
 				portalDate: '31.02.2026',
 				columns: [{ header: 'Fach', value: 'Invalid date' }],
 			}),
+			jsonRecord('daily-1-second-row', {
+				portalDate: '12.11.2026',
+				columns: [{ header: 'Hinweis', value: 'Raum bleibt unverändert' }],
+			}),
 		];
 		const response: PortalResponse = {
 			status: 200,
@@ -659,10 +1135,11 @@ describe('non-compacted resource records', () => {
 
 		expect(result.success).to.equal(true);
 		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(
-			'[{"Stunde":"2","Klasse":"10A","Vertretung":"Cover teacher","Lehrkraft":"Teacher","Fach":"Mathematics","Raum":"B12","Hinweis":""}]',
+			'[{"period":"2","class":"10A","substitution":"Cover teacher","teacher":"Teacher","subject":"Mathematics","room":"B12","note":""},' +
+				'{"period":"","class":"","substitution":"","teacher":"","subject":"","room":"","note":"Raum bleibt unverändert"}]',
 		);
 		expect(states.get('substitutions.2026-11-13.json')?.val).to.equal(
-			'[{"Stunde":"3","Klasse":"9B","Vertretung":"Room change","Lehrkraft":"","Fach":"Physics","Raum":"C4","Hinweis":""}]',
+			'[{"period":"3","class":"9B","substitution":"Room change","teacher":"","subject":"Physics","room":"C4","note":""}]',
 		);
 		expect(states.get('substitutions.json')?.val).to.equal(JSON.stringify(records));
 		expect(states.get('substitutions.dailyJsonDates')?.val).to.equal('["2026-11-12","2026-11-13"]');
@@ -681,10 +1158,10 @@ describe('non-compacted resource records', () => {
 		expect(invalidRecordPath).to.match(/^undated\.portal-record(?:-\d+)?$/u);
 		expect(objects.has(`substitutions.${firstRecordPath}`)).to.equal(true);
 		expect(states.get(`substitutions.${firstRecordPath}.portaldate`)?.val).to.equal('12.11.2026');
-		expect(states.get(`substitutions.${firstRecordPath}.stunde`)?.val).to.equal('2');
+		expect(states.get(`substitutions.${firstRecordPath}.period`)?.val).to.equal('2');
 		expect(states.get(`substitutions.${secondRecordPath}.portaldate`)?.val).to.equal('13.11.2026');
-		expect(states.get(`substitutions.${unknownRecordPath}.fach`)?.val).to.equal('Unassigned');
-		expect(states.get(`substitutions.${invalidRecordPath}.fach`)?.val).to.equal('Invalid date');
+		expect(states.get(`substitutions.${unknownRecordPath}.subject`)?.val).to.equal('Unassigned');
+		expect(states.get(`substitutions.${invalidRecordPath}.subject`)?.val).to.equal('Invalid date');
 		for (const date of ['2026-11-12', '2026-11-13']) {
 			expect(objects.get(`substitutions.${date}.json`)?.common).to.include({
 				type: 'string',
@@ -763,8 +1240,13 @@ describe('non-compacted resource records', () => {
 		expect(objects.has(firstRecordChannel)).to.equal(true);
 		expect(objects.has(secondRecordChannel)).to.equal(true);
 
+		const paths = JSON.parse(String(states.get('substitutions.recordPaths')?.val)) as Record<string, string[]>;
+		paths['legacy-fixed-paths'] = ['2026-11-12', '2026-11-12.json', `${firstRecordPath}.period`];
+		states.set('substitutions.recordPaths', state(JSON.stringify(paths)));
 		await complete([firstRecords[0]]);
 		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(firstDateJson);
+		expect(states.get(`${firstRecordChannel}.period`)?.val).to.equal('1');
+		expect(readableRecordPath(states, 'substitutions', 'legacy-fixed-paths')).to.equal('');
 		expect(states.has('substitutions.2026-11-13.json')).to.equal(false);
 		expect(objects.has('substitutions.2026-11-13')).to.equal(false);
 		expect(objects.has(firstRecordChannel)).to.equal(true);
@@ -787,13 +1269,13 @@ describe('non-compacted resource records', () => {
 			common: { name: 'My customized row' },
 			native: { portalRecordDisplayName: 'Generated row', portalRecordFieldIds: ['fach'] },
 		});
-		objects.set(`${legacyChannel}.fach`, {
-			_id: `${legacyChannel}.fach`,
+		objects.set(`${legacyChannel}.subject`, {
+			_id: `${legacyChannel}.subject`,
 			type: 'state',
 			common: { name: 'Fach', type: 'string', role: 'text', read: true, write: false },
 			native: { portalRecordFieldDisplayName: 'Fach' },
 		});
-		states.set(`${legacyChannel}.fach`, state('Mathematics'));
+		states.set(`${legacyChannel}.subject`, state('Mathematics'));
 		states.set('substitutions.json', state('[{"id":"previous"}]'));
 		states.set('substitutions.recordIds', state(JSON.stringify([sourceId])));
 		states.set('substitutions.recordPaths', state(JSON.stringify({ [sourceId]: ['legacy-record'] })));
@@ -821,7 +1303,7 @@ describe('non-compacted resource records', () => {
 		expect(incomplete.success).to.equal(false);
 		expect(failed.success).to.equal(false);
 		expect(objects.has(legacyChannel)).to.equal(true);
-		expect(states.get(`${legacyChannel}.fach`)?.val).to.equal('Mathematics');
+		expect(states.get(`${legacyChannel}.subject`)?.val).to.equal('Mathematics');
 		expect(objects.has('substitutions.2026-11-12.portal-record')).to.equal(false);
 
 		const originalSetState = adapter.setStateAsync;
@@ -843,7 +1325,7 @@ describe('non-compacted resource records', () => {
 		adapter.setStateAsync = originalSetState;
 		expect(failedCommit.success).to.equal(false);
 		expect(objects.has(legacyChannel)).to.equal(true);
-		expect(states.get(`${legacyChannel}.fach`)?.val).to.equal('Mathematics');
+		expect(states.get(`${legacyChannel}.subject`)?.val).to.equal('Mathematics');
 		expect(states.get('substitutions.json')?.val).to.equal('[{"id":"previous"}]');
 
 		const response: PortalResponse = {
@@ -862,9 +1344,9 @@ describe('non-compacted resource records', () => {
 		expect(complete.success).to.equal(true);
 		expect(objects.has(legacyChannel)).to.equal(false);
 		expect(objects.get(migratedChannel)?.common.name).to.equal('My customized row');
-		expect(states.get(`${migratedChannel}.fach`)?.val).to.equal('Mathematics');
+		expect(states.get(`${migratedChannel}.subject`)?.val).to.equal('Mathematics');
 		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(
-			'[{"Stunde":"","Klasse":"","Vertretung":"","Lehrkraft":"","Fach":"Mathematics","Raum":"","Hinweis":""}]',
+			'[{"period":"","class":"","substitution":"","teacher":"","subject":"Mathematics","room":"","note":""}]',
 		);
 		expect(states.get('substitutions.json')?.val).to.equal(JSON.stringify([record]));
 	});
@@ -1059,7 +1541,7 @@ describe('parent child lesson object synchronization', () => {
 		const lessonsBase = 'students.same-student-2.lessons';
 		const recordIds = JSON.parse(String(firstRun.states.get(`${lessonsBase}.recordIds`)?.val)) as string[];
 		const recordPaths = recordIds.map(id => readableRecordPath(firstRun.states, lessonsBase, id)).sort();
-		expect(recordPaths).to.deep.equal(['current', 'current-2']);
+		expect(recordPaths).to.deep.equal(['current-2', 'current-3']);
 	});
 
 	it('organizes verified student sections without mixing children or cloning the account timetable', async () => {
@@ -1158,11 +1640,13 @@ describe('parent child lesson object synchronization', () => {
 		const currentBase = `${lessonsBase}.current`;
 		const currentId = JSON.parse(String(states.get(`${currentBase}.recordIds`)?.val))[0] as string;
 		const currentRecordBase = `${currentBase}.${readableRecordPath(states, currentBase, currentId)}`;
-		const combinedFieldId = `${currentRecordBase}.thema_datum_inhalt_wenn_hinterlegt_hausaufgaben_wenn_hinterlegt`;
+		const combinedFieldId = `${currentRecordBase}.lesson_details`;
 		expect(objects.get(`${currentRecordBase}.name`)?.common.name).to.equal('Name');
 		expect(objects.get(combinedFieldId)?.common.name).to.equal('Lesson details');
 		expect(states.get(combinedFieldId)?.val).to.equal('Synthetic combined details');
-		expect(objects.get(`${currentRecordBase}.weiteres`)?.common.name).to.equal('Weiteres');
+		expect(objects.get(`${currentRecordBase}.additional_information`)?.common.name).to.equal(
+			'Additional information',
+		);
 		const aggregate = JSON.parse(String(states.get(`${lessonsBase}.json`)?.val)) as Array<{
 			fields?: Array<{ header: string | null; text: string }>;
 		}>;
@@ -1499,7 +1983,7 @@ describe('parent child timetable object synchronization', () => {
 		expect(states.get(`${movedTuesdayLesson}.subject`)?.val).to.equal('Previous Tuesday');
 		expect(states.get(`${nextTuesdayLesson}.subject`)?.val).to.equal('Next Tuesday');
 		expect(states.get(`${nextMondayLesson}.subject`)?.val).to.equal('Next Monday');
-		expect(states.get(`${timedFridayLesson}.stunde`)?.val).to.equal('5');
+		expect(states.get(`${timedFridayLesson}.period`)?.val).to.equal('5');
 		expect(states.get(`${timedFridayLesson}.lesson`)?.val).to.equal('Chemistry');
 		expect(states.get(`${timedFridayLesson}.start_time`)?.val).to.equal('11:25');
 		expect(states.get(`${timedFridayLesson}.end_time`)?.val).to.equal('12:10');
@@ -1587,10 +2071,10 @@ describe('parent child timetable object synchronization', () => {
 
 		expect(result.success).to.equal(true);
 		expect(objects.get(generatedLesson)?.common.name).to.equal('2 08:35 - 09:20 2. — E1 2-206 WRN');
-		expect(states.get(`${generatedLesson}.stunde`)?.val).to.equal('2');
+		expect(states.get(`${generatedLesson}.period`)?.val).to.equal('2');
 		expect(states.get(`${generatedLesson}.lesson`)?.val).to.equal('E1 2-206 WRN');
 		expect(objects.get(customizedLesson)?.common.name).to.equal('My customized timetable lesson');
-		expect(states.get(`${customizedLesson}.stunde`)?.val).to.equal('3');
+		expect(states.get(`${customizedLesson}.period`)?.val).to.equal('3');
 		expect(states.get(`${customizedLesson}.lesson`)?.val).to.equal('Custom lesson');
 	});
 
@@ -1646,15 +2130,15 @@ describe('parent child timetable object synchronization', () => {
 		const ambiguousLesson = `${lessonsBase}.lesson_04`;
 		expect(result.success).to.equal(true);
 		expect(states.get(`${lessonsBase}.recordIds`)?.val).to.equal('["05","05_2","lesson_03","lesson_04"]');
-		expect(states.get(`${firstLesson}.stunde`)?.val).to.equal('5');
+		expect(states.get(`${firstLesson}.period`)?.val).to.equal('5');
 		expect(states.get(`${firstLesson}.start_time`)?.val).to.equal('11:25');
 		expect(states.get(`${firstLesson}.end_time`)?.val).to.equal('12:10');
-		expect(states.get(`${duplicateLesson}.stunde`)?.val).to.equal('5');
+		expect(states.get(`${duplicateLesson}.period`)?.val).to.equal('5');
 		expect(states.get(`${duplicateLesson}.lesson`)?.val).to.equal('Biology');
-		expect(objects.has(`${unknownLesson}.stunde`)).to.equal(false);
+		expect(objects.has(`${unknownLesson}.period`)).to.equal(false);
 		expect(states.get(`${unknownLesson}.lesson`)?.val).to.equal('Study hall');
 		expect(states.get(`${unknownLesson}.start_time`)?.val).to.equal('13:05');
-		expect(objects.has(`${ambiguousLesson}.stunde`)).to.equal(false);
+		expect(objects.has(`${ambiguousLesson}.period`)).to.equal(false);
 		expect(states.get(`${ambiguousLesson}.lesson`)?.val).to.equal('Ambiguous period');
 		expect(JSON.parse(String(states.get(`${timetableBase}.json`)?.val))).to.deep.equal(records);
 	});

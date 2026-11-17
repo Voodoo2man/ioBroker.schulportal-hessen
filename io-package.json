@@ -20,15 +20,15 @@
 		"titleLang": {
 			"en": "Schulportal Hessen",
 			"de": "Schulportal Hessen",
-			"ru": "Шульпорталь Гессен",
+			"ru": "Schulportal Hessen",
 			"pt": "Schulportal Hessen",
 			"nl": "Schulportal Hessen",
-			"fr": "Schulportal Hesse",
-			"it": "Schulportal Assia",
-			"es": "Portal escolar de Hessen",
-			"pl": "Schulportal Hesja",
-			"uk": "Шульпорталь Гессен",
-			"zh-cn": "黑森州学校门户网站"
+			"fr": "Schulportal Hessen",
+			"it": "Schulportal Hessen",
+			"es": "Schulportal Hessen",
+			"pl": "Schulportal Hessen",
+			"uk": "Schulportal Hessen",
+			"zh-cn": "Schulportal Hessen"
 		},
 		"desc": {
 			"en": "Adapter for the Schulportal Hessen school portal",
@@ -44,7 +44,7 @@
 			"zh-cn": "Schulportal Hessen 学校门户的适配器"
 		},
 		"authors": [
-			"Voodoo2man <62031459+Voodoo2man@users.noreply.github.com>"
+			"Voodoo2man <Voodoo2man@outlook.de>"
 		],
 		"keywords": [
 			"school",

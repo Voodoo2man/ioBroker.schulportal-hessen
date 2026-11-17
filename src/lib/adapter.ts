@@ -25,9 +25,18 @@ import {
 const STUDENTS_BASE = 'students';
 const INBOX_BASE = 'inbox';
 const INBOX_CATEGORIES = ['read', 'unread'] as const;
-const DAILY_SUBSTITUTION_FIELDS = ['Stunde', 'Klasse', 'Vertretung', 'Lehrkraft', 'Fach', 'Raum', 'Hinweis'] as const;
-type DailySubstitutionField = (typeof DAILY_SUBSTITUTION_FIELDS)[number];
+const SUBSTITUTION_COLUMN_ALIASES = {
+	stunde: 'period',
+	klasse: 'class',
+	vertretung: 'substitution',
+	lehrkraft: 'teacher',
+	fach: 'subject',
+	raum: 'room',
+	hinweis: 'note',
+} as const;
+type DailySubstitutionField = (typeof SUBSTITUTION_COLUMN_ALIASES)[keyof typeof SUBSTITUTION_COLUMN_ALIASES];
 type DailySubstitutionRow = Record<DailySubstitutionField, string>;
+const ACCOUNT_NAME_STATE = 'info.accountName';
 const ACCOUNT_TYPE_STATE = 'info.accountType';
 const ROOT_LAST_ERROR_STATE = 'info.lastError';
 const RESOURCE_BASES: Record<PortalResourceKind, string> = {
@@ -92,13 +101,13 @@ function groupDailySubstitutionRows(records: readonly PortalRecord[]): Map<strin
 			continue;
 		}
 		const row: DailySubstitutionRow = {
-			Stunde: '',
-			Klasse: '',
-			Vertretung: '',
-			Lehrkraft: '',
-			Fach: '',
-			Raum: '',
-			Hinweis: '',
+			period: '',
+			class: '',
+			substitution: '',
+			teacher: '',
+			subject: '',
+			room: '',
+			note: '',
 		};
 		for (const column of columns) {
 			if (typeof column !== 'object' || column === null || Array.isArray(column)) {
@@ -108,9 +117,9 @@ function groupDailySubstitutionRows(records: readonly PortalRecord[]): Map<strin
 			if (typeof pair.header !== 'string' || typeof pair.value !== 'string') {
 				continue;
 			}
-			const header = pair.header.trim();
-			if ((DAILY_SUBSTITUTION_FIELDS as readonly string[]).includes(header)) {
-				row[header as DailySubstitutionField] = pair.value;
+			const header = pair.header.trim().toLowerCase() as keyof typeof SUBSTITUTION_COLUMN_ALIASES;
+			if (Object.hasOwn(SUBSTITUTION_COLUMN_ALIASES, header)) {
+				row[SUBSTITUTION_COLUMN_ALIASES[header]] = pair.value;
 			}
 		}
 		dateRows.push(row);
@@ -147,6 +156,28 @@ const CHILD_LESSON_SECTION_NAMES: Record<ChildLessonSectionId, string> = {
 	exams: 'Exams',
 	other: 'Other student data',
 };
+
+function getFixedResourceChildPaths(resource: PortalResourceKind, base: string): string[] {
+	const paths = new Set(['status', 'count', 'lastUpdate', 'json', 'recordIds', 'recordPaths', 'records']);
+	if (resource === 'messages') {
+		paths.add('unreadCount');
+	}
+	if (resource === 'substitutions' && base === getResourceBase(resource)) {
+		paths.add('dailyJsonDates');
+	}
+	if (resource === 'lessons' && base.endsWith('.lessons')) {
+		paths.add('sectionIds');
+		for (const section of Object.keys(CHILD_LESSON_SECTION_NAMES)) {
+			paths.add(section);
+		}
+	}
+	if (resource === 'timetable' && base.endsWith('.timetable')) {
+		for (const path of ['today', 'tomorrow', 'week']) {
+			paths.add(path);
+		}
+	}
+	return [...paths].map(path => path.toLowerCase());
+}
 
 type ParsedRecord = PortalRecord;
 
@@ -207,7 +238,14 @@ function getAccountType(records: readonly PortalRecord[]): string {
 	return '';
 }
 
-function getReadableRecordName(record: PortalRecord): string {
+const PORTAL_SECTION_NAMES = new Map([
+	['LGs', 'Learning groups'],
+	['klausuren', 'Exams'],
+	['mappen', 'Lesson folders'],
+	['attendanceTable', 'Attendance'],
+]);
+
+function getReadableRecordName(record: PortalRecord, forDisplay = false): string {
 	const sectionName =
 		record.format === 'html'
 			? record.childSection
@@ -216,7 +254,7 @@ function getReadableRecordName(record: PortalRecord): string {
 					? 'Personal timetable'
 					: record.section === 'all'
 						? 'Class timetable'
-						: record.section
+						: ((forDisplay ? PORTAL_SECTION_NAMES.get(record.section) : undefined) ?? record.section)
 			: typeof record.fields.name === 'string'
 				? record.fields.name
 				: typeof record.fields.title === 'string'
@@ -434,10 +472,12 @@ interface ChildTimetableAssignment {
 interface PathReservation {
 	ownerId: string;
 	path: string;
+	fixed?: boolean;
 }
 
 interface RecordFieldDescriptor {
 	id: string;
+	previousId?: string;
 	name: string;
 	value: string | number | boolean;
 	type: ioBroker.CommonType;
@@ -470,16 +510,26 @@ function allocateSegmentsWithReservations(
 	entries: readonly { sourceId: string; displayName: string }[],
 	reservations: readonly PathReservation[],
 ): Map<string, string> {
-	const initial = allocateIdPathSegments(entries);
+	const fixedReservations = reservations.filter(({ fixed }) => fixed);
+	const fixedEntries = fixedReservations.map(({ path }, index) => ({
+		sourceId: `!fixed-${index}-${path.toLowerCase()}`,
+		displayName: path.toLowerCase(),
+	}));
+	const baseline = allocateIdPathSegments([...entries, ...fixedEntries]);
 	const reservedPaths = [
 		...new Set(
 			reservations
-				.filter(({ ownerId, path }) => initial.get(ownerId) !== path && SAFE_READABLE_PATH_PATTERN.test(path))
+				.map(({ ownerId, path, fixed }) => ({ ownerId, path: path.toLowerCase(), fixed }))
+				.filter(
+					({ ownerId, path, fixed }) =>
+						SAFE_READABLE_PATH_PATTERN.test(path) &&
+						(fixed || baseline.get(ownerId)?.toLowerCase() !== path),
+				)
 				.map(({ path }) => path),
 		),
 	].sort();
 	if (reservedPaths.length === 0) {
-		return initial;
+		return new Map(entries.map(({ sourceId }) => [sourceId, baseline.get(sourceId)!]));
 	}
 
 	const reservedEntries = reservedPaths.map((path, index) => ({
@@ -588,41 +638,76 @@ function getFieldId(label: string, index: number, usedIds: Set<string>): string 
 	return candidate;
 }
 
+const PORTAL_COLUMN_ALIASES = new Map<string, string>([
+	...Object.entries(SUBSTITUTION_COLUMN_ALIASES),
+	['datum', 'date'],
+	['wochentag', 'weekday'],
+	['tag', 'day'],
+	['kurs', 'course'],
+	['weiteres', 'additional information'],
+	['anwesend', 'present'],
+	['entschuldigt', 'excused'],
+	['andere schulische veranstaltung', 'other school event'],
+	[COMBINED_LESSON_DETAILS_HEADER, 'lesson details'],
+]);
+
+const KNOWN_ENGLISH_COLUMN_HEADERS = new Set([
+	...PORTAL_COLUMN_ALIASES.values(),
+	'assessment',
+	'course name',
+	'description',
+	'end',
+	'end time',
+	'entry',
+	'homework',
+	'item',
+	'lesson',
+	'mark',
+	'name',
+	'start',
+	'start time',
+	'time',
+	'title',
+	'topic',
+]);
+
+function getColumnDescriptor(
+	header: string | null,
+	index: number,
+	value: string,
+	usedIds: Set<string>,
+	previousIds: Set<string>,
+): RecordFieldDescriptor {
+	const normalized = normalizeFieldHeader(header ?? '');
+	const alias = PORTAL_COLUMN_ALIASES.get(normalized);
+	const knownName = alias
+		? `${alias[0].toUpperCase()}${alias.slice(1)}`
+		: header && KNOWN_ENGLISH_COLUMN_HEADERS.has(normalized)
+			? header.trim()
+			: undefined;
+	const name = knownName ?? `Column ${index + 1}`;
+	const columnId = `column_${String(index + 1).padStart(2, '0')}`;
+	const id = getFieldId(knownName ?? columnId, index, usedIds);
+	const previousId = getFieldId(header?.trim() ? header : columnId, index, previousIds);
+	return { id, previousId, name, value, type: 'string', role: 'text' };
+}
+
 function getRecordFieldDescriptors(record: PortalRecord, resource?: PortalResourceKind): RecordFieldDescriptor[] {
 	const usedIds = new Set<string>();
 	if (record.format === 'html') {
+		const previousIds = new Set<string>();
 		const timetablePeriodNumber = resource === 'timetable' ? getRecordTimetablePeriodNumber(record) : null;
 		return record.fields.flatMap((field, index) => {
-			const originalLabel = field.header;
-			const hasHeader = typeof originalLabel === 'string' && originalLabel.trim().length > 0;
-			const normalizedHeader = hasHeader ? normalizeFieldHeader(originalLabel) : '';
-			const isPeriodField = resource === 'timetable' && hasHeader && isTimetablePeriodHeader(originalLabel);
-			if (isPeriodField && timetablePeriodNumber === null) {
-				return [];
-			}
+			const isPeriodField =
+				resource === 'timetable' && field.header !== null && isTimetablePeriodHeader(field.header);
 			const value = isPeriodField ? timetablePeriodNumber : field.text;
-			if (typeof value !== 'string') {
-				return [];
-			}
-			const name = hasHeader
-				? normalizedHeader === COMBINED_LESSON_DETAILS_HEADER
-					? 'Lesson details'
-					: originalLabel
-				: `Column ${index + 1}`;
-			const fieldIdSource = hasHeader ? originalLabel : `column_${String(index + 1).padStart(2, '0')}`;
-			return [
-				{
-					id: getFieldId(fieldIdSource, index, usedIds),
-					name,
-					value,
-					type: 'string',
-					role: 'text',
-				},
-			];
+			return typeof value === 'string'
+				? [getColumnDescriptor(field.header, index, value, usedIds, previousIds)]
+				: [];
 		});
 	}
 
-	const descriptors = Object.entries(record.fields).map(([key, value], index) => {
+	const descriptors = Object.entries(record.fields).map<RecordFieldDescriptor>(([key, value], index) => {
 		let stateValue: string | number | boolean;
 		let type: ioBroker.CommonType;
 		let role: string;
@@ -665,6 +750,7 @@ function getRecordFieldDescriptors(record: PortalRecord, resource?: PortalResour
 		return descriptors;
 	}
 
+	const previousIds = new Set(usedIds);
 	columns.forEach((column, index) => {
 		if (typeof column !== 'object' || column === null || Array.isArray(column)) {
 			return;
@@ -673,15 +759,8 @@ function getRecordFieldDescriptors(record: PortalRecord, resource?: PortalResour
 		if (typeof columnRecord.value !== 'string') {
 			return;
 		}
-		const header = typeof columnRecord.header === 'string' ? columnRecord.header : '';
-		const hasHeader = header.trim().length > 0;
-		descriptors.push({
-			id: getFieldId(hasHeader ? header : `column_${String(index + 1).padStart(2, '0')}`, index, usedIds),
-			name: hasHeader ? header : `Column ${index + 1}`,
-			value: columnRecord.value,
-			type: 'string',
-			role: 'text',
-		});
+		const header = typeof columnRecord.header === 'string' ? columnRecord.header : null;
+		descriptors.push(getColumnDescriptor(header, index, columnRecord.value, usedIds, previousIds));
 	});
 	return descriptors;
 }
@@ -834,7 +913,7 @@ class CredentialUnavailableError extends Error {
 export class SchulportalHessenAdapter extends utils.Adapter {
 	private readonly refreshCoordinator = new RefreshCoordinator();
 	private readonly activeSessions = new Set<PortalSession>();
-	private refreshTimer: ioBroker.Interval | undefined;
+	private refreshTimer: ioBroker.Timeout | undefined;
 	private activeRefresh: Promise<void> | null = null;
 	private schoolOptionsCache: { expiresAt: number; options: SchoolOption[] } | null = null;
 	private schoolOptionsPromise: Promise<SchoolOption[]> | null = null;
@@ -910,6 +989,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 
 		try {
 			await this.createObjectTree();
+			if (this.unloading) {
+				return;
+			}
 			if (recoverableSchoolSearchConfig) {
 				const code = configErrors.includes(RECOVERABLE_SCHOOL_ID_ERROR)
 					? 'invalid-school-id'
@@ -922,11 +1004,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				await this.setNotConfiguredStatus();
 				return;
 			}
-			const intervalMinutes = this.config.refreshIntervalMinutes ?? DEFAULT_REFRESH_INTERVAL_MINUTES;
-			this.refreshTimer = this.setInterval(() => {
-				void this.requestRefresh().catch(() => this.log.warn('Scheduled portal refresh failed.'));
-			}, intervalMinutes * 60_000);
-			await this.requestRefresh();
+			await this.requestRefresh().catch(() => this.log.warn('Initial portal refresh failed.'));
 		} catch {
 			this.log.error('Adapter initialization failed.');
 			this.terminate('Adapter initialization failed', utils.EXIT_CODES.ADAPTER_REQUESTED_TERMINATION);
@@ -946,6 +1024,8 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			'text',
 			configured ? 'initializing' : 'not-configured',
 		);
+		await this.ensureState(ACCOUNT_NAME_STATE, 'Account display name', 'string', 'text', '');
+		await this.setAckState(ACCOUNT_NAME_STATE, this.config.accountName?.trim() ?? '');
 		await this.ensureState(ACCOUNT_TYPE_STATE, 'Account type', 'string', 'text', '');
 		await this.ensureState(ROOT_LAST_UPDATE_STATE, 'Last successful data update', 'number', 'value.time', 0, 'ms');
 		await this.ensureState(REFRESH_STATE, 'Refresh now', 'boolean', 'button', false, undefined, true);
@@ -1120,7 +1200,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 	}
 
 	private onStateChange(id: string, state: ioBroker.State | null | undefined): void {
-		if (id !== REFRESH_STATE || !state || state.ack !== false) {
+		if ((id !== REFRESH_STATE && id !== `${this.namespace}.${REFRESH_STATE}`) || !state || state.ack !== false) {
 			return;
 		}
 		void this.setAckState(REFRESH_STATE, false).catch(() => this.log.warn('Could not acknowledge manual refresh.'));
@@ -1133,26 +1213,38 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if (this.unloading) {
 			return Promise.resolve();
 		}
+		if (this.activeRefresh) {
+			return this.activeRefresh;
+		}
+		this.cancelRefreshTimer();
 		const refresh = this.refreshCoordinator.run(async () => {
 			if (!this.unloading) {
 				await this.setAckState(ROOT_STATUS_STATE, 'updating');
-				await this.refreshAccount();
+				if (!this.unloading) {
+					await this.refreshAccount();
+				}
 			}
 		});
 		this.activeRefresh = refresh;
-		void refresh.then(
-			() => {
-				if (this.activeRefresh === refresh) {
-					this.activeRefresh = null;
-				}
-			},
-			() => {
-				if (this.activeRefresh === refresh) {
-					this.activeRefresh = null;
-				}
-			},
-		);
+		const onSettled = (): void => {
+			this.activeRefresh = null;
+			if (!this.unloading && this.hasConfiguredAccount()) {
+				const intervalMinutes = this.config.refreshIntervalMinutes ?? DEFAULT_REFRESH_INTERVAL_MINUTES;
+				this.refreshTimer = this.setTimeout(() => {
+					this.refreshTimer = undefined;
+					void this.requestRefresh().catch(() => this.log.warn('Scheduled portal refresh failed.'));
+				}, intervalMinutes * 60_000);
+			}
+		};
+		void refresh.then(onSettled, onSettled);
 		return refresh;
+	}
+
+	private cancelRefreshTimer(): void {
+		if (this.refreshTimer !== undefined) {
+			this.clearTimeout(this.refreshTimer);
+			this.refreshTimer = undefined;
+		}
 	}
 
 	private async refreshAccount(): Promise<void> {
@@ -1192,6 +1284,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				this,
 				this.config.credentialId,
 			);
+			if (this.unloading) {
+				return { connected: false, degraded: false, updated: false, lastError: '' };
+			}
 			if (
 				typeof credentials.values.login !== 'string' ||
 				credentials.values.login.length === 0 ||
@@ -1823,7 +1918,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 							`${timetableBase}.${recordSourceId}`,
 							`${timetableBase}.records.${recordSourceId}`,
 						];
-						await this.commitRecordChannel(
+						const failed = await this.commitRecordChannel(
 							lessonsBase,
 							record,
 							lessonId,
@@ -1831,6 +1926,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 							false,
 							'timetable',
 						);
+						if (failed) {
+							cleanupByChild.set(child.id, true);
+						}
 					}
 				}
 				pendingCleanup.push({ base: lessonsBase, childId: child.id, ...lessonPlan });
@@ -2014,7 +2112,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		const pathEntries = children.map(child => ({ sourceId: child.id, displayName: child.name }));
 		const pathReservations = new Map<string, PathReservation>();
 		for (const path of ['timetable', 'lessons', 'recordIds', 'pathMapping', 'pendingTimetablePaths']) {
-			pathReservations.set(`reserved:${path}`, { ownerId: `reserved:${path}`, path });
+			pathReservations.set(`reserved:${path}`, { ownerId: `reserved:${path}`, path, fixed: true });
 		}
 		const addPathReservation = async (sourceId: string, path: string): Promise<void> => {
 			if (await this.getObjectAsync(`${base}.${path}`)) {
@@ -2227,7 +2325,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		resource?: PortalResourceKind,
 	): Promise<boolean> {
 		const channelId = `${base}.${recordSegment}`;
-		const displayName = getReadableRecordName(record);
+		const displayName = getReadableRecordName(record, true);
 		const generatedDisplayName =
 			resource === 'timetable' && record.format === 'html' && record.section === 'own'
 				? displayName.replace(/^Personal timetable — /u, '')
@@ -2240,7 +2338,14 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 					continue;
 				}
 				const legacyObject = await this.getObjectAsync(legacyObjectId);
-				const legacyName = legacyObject?.common.name;
+				const legacyPath = legacyObjectId.startsWith(`${base}.`) ? legacyObjectId.slice(base.length + 1) : '';
+				const isReservedFixedObject =
+					!legacyPath.includes('.') &&
+					getFixedResourceChildPaths(resource ?? 'file-metadata', base).includes(legacyPath.toLowerCase());
+				const hasRecordMetadata =
+					typeof legacyObject?.native?.portalRecordDisplayName === 'string' ||
+					Array.isArray(legacyObject?.native?.portalRecordFieldIds);
+				const legacyName = isReservedFixedObject && !hasRecordMetadata ? undefined : legacyObject?.common?.name;
 				if (
 					typeof legacyName === 'string' &&
 					legacyName !== legacyObject?.native?.portalRecordDisplayName &&
@@ -2258,6 +2363,26 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				native: { portalRecordDisplayName: generatedDisplayName, portalRecordFieldIds: [] },
 			});
 		}
+		const existingName = existing?.common?.name;
+		const nameUpdate = existing
+			? (getGeneratedObjectNameUpdate(
+					existingName,
+					existing.native?.portalRecordDisplayName,
+					generatedDisplayName,
+				) ?? (existingName === `Record ${record.id}` ? generatedDisplayName : null))
+			: null;
+		const hasValidName =
+			typeof existingName === 'string' ||
+			(typeof existingName === 'object' &&
+				existingName !== null &&
+				!Array.isArray(existingName) &&
+				typeof existingName.en === 'string' &&
+				Object.values(existingName).every(value => typeof value === 'string'));
+		await this.extendObjectAsync(channelId, {
+			type: 'channel',
+			common: { name: nameUpdate ?? (hasValidName ? existingName : objectName) },
+			native: { portalRecordDisplayName: generatedDisplayName },
+		});
 
 		let descriptors: RecordFieldDescriptor[];
 		if (compact) {
@@ -2277,16 +2402,20 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		} else {
 			descriptors = getRecordFieldDescriptors(record, resource);
 		}
-		for (const descriptor of descriptors) {
-			await this.commitRecordFieldState(`${channelId}.${descriptor.id}`, descriptor);
-		}
-
 		const previousFieldIds = Array.isArray(existing?.native?.portalRecordFieldIds)
 			? existing.native.portalRecordFieldIds.filter(
 					(value: unknown): value is string => typeof value === 'string' && RECORD_ID_PATTERN.test(value),
 				)
 			: [];
 		const currentFieldIds = descriptors.map(field => field.id);
+		for (const descriptor of descriptors) {
+			const previousId = descriptor.previousId;
+			const legacyId =
+				previousId && previousFieldIds.includes(previousId) && !currentFieldIds.includes(previousId)
+					? `${channelId}.${previousId}`
+					: undefined;
+			await this.commitRecordFieldState(`${channelId}.${descriptor.id}`, descriptor, legacyId);
+		}
 		const failedFieldDeletions: string[] = [];
 		for (const fieldId of previousFieldIds) {
 			if (currentFieldIds.includes(fieldId)) {
@@ -2299,15 +2428,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			}
 		}
 
-		const nameUpdate = existing
-			? (getGeneratedObjectNameUpdate(
-					existing.common.name,
-					existing.native?.portalRecordDisplayName,
-					generatedDisplayName,
-				) ?? (existing.common.name === `Record ${record.id}` ? generatedDisplayName : null))
-			: null;
 		await this.extendObjectAsync(channelId, {
-			...(nameUpdate ? { common: { name: nameUpdate } } : {}),
 			native: {
 				portalRecordDisplayName: generatedDisplayName,
 				portalRecordFieldIds: [...new Set([...currentFieldIds, ...failedFieldDeletions])].sort(),
@@ -2316,13 +2437,24 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		return failedFieldDeletions.length > 0;
 	}
 
-	private async commitRecordFieldState(id: string, descriptor: RecordFieldDescriptor): Promise<void> {
+	private async commitRecordFieldState(
+		id: string,
+		descriptor: RecordFieldDescriptor,
+		legacyId?: string,
+	): Promise<void> {
 		const existing = await this.getObjectAsync(id);
 		if (!existing) {
+			const legacy = legacyId ? await this.getObjectAsync(legacyId) : undefined;
+			const previousName = legacy?.type === 'state' ? legacy.common.name : undefined;
+			const previousGeneratedName = legacy?.native?.portalRecordFieldDisplayName;
+			const name =
+				previousName && typeof previousGeneratedName === 'string' && previousName !== previousGeneratedName
+					? previousName
+					: descriptor.name;
 			await this.setObjectNotExistsAsync(id, {
 				type: 'state',
 				common: {
-					name: descriptor.name,
+					name,
 					type: descriptor.type,
 					role: descriptor.role,
 					read: true,
@@ -2366,6 +2498,29 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		return failedDeletions.length > 0;
 	}
 
+	private async cleanLegacyFieldsAtFixedPath(id: string, resource: PortalResourceKind): Promise<void> {
+		const fixed = await this.getObjectAsync(id);
+		const tracked: unknown = fixed?.native?.portalRecordFieldIds;
+		if ((fixed?.type !== 'state' && fixed?.type !== 'channel') || !Array.isArray(tracked)) {
+			return;
+		}
+		const protectedFields = new Set(fixed.type === 'channel' ? getFixedResourceChildPaths(resource, id) : []);
+		for (const field of new Set(tracked)) {
+			if (
+				typeof field !== 'string' ||
+				!RECORD_ID_PATTERN.test(field) ||
+				protectedFields.has(field.toLowerCase())
+			) {
+				continue;
+			}
+			const childId = `${id}.${field}`;
+			const child = await this.getObjectAsync(childId);
+			if (child?.type === 'state' && typeof child.native?.portalRecordFieldDisplayName === 'string') {
+				await this.delObjectAsync(childId);
+			}
+		}
+	}
+
 	private async commitCompleteResource(
 		resource: PortalResourceKind,
 		records: readonly ParsedRecord[],
@@ -2386,7 +2541,6 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if (!plan) {
 			return false;
 		}
-		const pathReservations: PathReservation[] = [];
 		const reservedDailyDates =
 			resource === 'substitutions'
 				? new Set([
@@ -2394,9 +2548,13 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 						...groupDailySubstitutionRows(records).keys(),
 					])
 				: new Set<string>();
-		for (const date of reservedDailyDates) {
-			pathReservations.push({ ownerId: `daily-json-${date}`, path: date });
-		}
+		const fixedResourcePaths = new Set(getFixedResourceChildPaths(resource, base));
+		const reservedFixedPaths = new Set([...fixedResourcePaths, ...reservedDailyDates]);
+		const pathReservations: PathReservation[] = [...reservedFixedPaths].map((path, index) => ({
+			ownerId: `fixed:${index}:${path}`,
+			path,
+			fixed: true,
+		}));
 		for (const sourceId of new Set([...previousIds, ...previousPaths.keys()])) {
 			const paths = previousPaths.get(sourceId) ?? [sourceId];
 			for (const path of paths) {
@@ -2409,7 +2567,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			resource === 'substitutions'
 				? getSubstitutionRecordPaths(records)
 				: allocateSegmentsWithReservations(pathEntries, pathReservations);
-		const currentSegments = new Set(currentPaths.values());
+		const currentSegments = new Set([...currentPaths.values()].map(path => path.toLowerCase()));
 		const dataJson = JSON.stringify(records);
 		if (typeof dataJson !== 'string') {
 			throw new Error('Invalid JSON data');
@@ -2468,27 +2626,43 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				oldPaths.add(sourceId);
 			}
 			for (const oldPath of oldPaths) {
-				if (currentSegments.has(oldPath) || reservedDailyDates.has(oldPath)) {
+				const normalizedOldPath = oldPath.toLowerCase();
+				const [root, child] = normalizedOldPath.split('.');
+				if (
+					currentSegments.has(normalizedOldPath) ||
+					(child &&
+						(fixedResourcePaths.has(root) ||
+							currentSegments.has(root) ||
+							currentSegments.has(`${root}.${child}`))) ||
+					(resource === 'substitutions' &&
+						((root === 'undated' && !child) ||
+							(reservedDailyDates.has(root) && (!child || child === 'json'))))
+				) {
 					continue;
 				}
-				let failed = false;
 				try {
-					await this.delObjectAsync(`${base}.${oldPath}`, { recursive: true });
+					const id = `${base}.${oldPath}`;
+					if (fixedResourcePaths.has(normalizedOldPath)) {
+						if (normalizedOldPath !== 'records') {
+							await this.cleanLegacyFieldsAtFixedPath(id, resource);
+						}
+					} else {
+						await this.delObjectAsync(id, { recursive: true });
+					}
 				} catch {
-					failed = true;
 					cleanupPending = true;
-				}
-				if (failed) {
 					const failedPaths = pathsToRemove.get(sourceId) ?? new Set<string>();
 					failedPaths.add(oldPath);
 					pathsToRemove.set(sourceId, failedPaths);
 				}
 			}
 		}
-		try {
-			await this.delObjectAsync(`${base}.records`, { recursive: true });
-		} catch {
-			cleanupPending = true;
+		if (!currentSegments.has('records')) {
+			try {
+				await this.delObjectAsync(`${base}.records`, { recursive: true });
+			} catch {
+				cleanupPending = true;
+			}
 		}
 
 		const nextPaths = new Map<string, string[]>();
@@ -2605,10 +2779,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 
 	private async onUnload(callback: () => void): Promise<void> {
 		this.unloading = true;
-		if (this.refreshTimer !== undefined) {
-			this.clearInterval(this.refreshTimer);
-			this.refreshTimer = undefined;
-		}
+		this.cancelRefreshTimer();
 		for (const session of this.activeSessions) {
 			session.close();
 		}
