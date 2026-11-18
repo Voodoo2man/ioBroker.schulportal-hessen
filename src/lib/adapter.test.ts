@@ -81,11 +81,16 @@ function makeTestAdapter(): {
 } {
 	const adapter = new SchulportalHessenAdapter() as unknown as TestAdapter;
 	adapter.config = { schoolId: '5202', credentialId: 'system.credentials.test-credential' };
+	adapter.namespace = 'schulportal-hessen.0';
 	adapter.log = { debug: () => undefined, warn: () => undefined, error: () => undefined };
 	const objects = new Map<string, StoredObject>();
 	const states = new Map<string, ioBroker.State>();
 
-	adapter.getObjectAsync = id => Promise.resolve((objects.get(id) as unknown as ioBroker.Object | undefined) ?? null);
+	adapter.getObjectAsync = id => {
+		const object = objects.get(id);
+		const result = object?._id === id ? { ...object, _id: `${adapter.namespace}.${id}` } : object;
+		return Promise.resolve((result as unknown as ioBroker.Object | undefined) ?? null);
+	};
 	adapter.setObjectNotExistsAsync = (id, object) => {
 		if (!objects.has(id)) {
 			objects.set(id, { _id: id, ...(object as unknown as Omit<StoredObject, '_id'>) });
@@ -1416,6 +1421,90 @@ describe('inbox header categorization', () => {
 		expect(objects.has('inbox.recordPaths')).to.equal(false);
 		expect(objects.has('inbox.read')).to.equal(true);
 		expect(objects.has('inbox.unread')).to.equal(true);
+	});
+
+	it('retries cleanup of the tracked inbox recordIds spelling variant after the message disappears', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const base = 'inbox.read';
+		const legacyId = `${base}.recordids`;
+		const fieldId = `${legacyId}.subject`;
+		const manualId = `${fieldId}.manual`;
+		const unownedId = `${base}.recordpaths`;
+		const aliasId = `${base}.unreadcount`;
+		const orphanId = `${base}.lastupdate`;
+		const record = jsonRecord('old-inbox-record', { subject: 'recordIds', unread: false });
+		const sourceId = createHash('sha256').update(record.id).digest('hex');
+		const legacyNative = { portalRecordDisplayName: 'recordIds', portalRecordFieldIds: ['subject', 'manual'] };
+		states.set(`${base}.recordIds`, state(JSON.stringify([sourceId])));
+		states.set(
+			`${base}.recordPaths`,
+			state(JSON.stringify({ [sourceId]: ['recordids', 'recordpaths', 'unreadcount'] })),
+		);
+		for (const [id, type, native] of [
+			[legacyId, 'channel', legacyNative],
+			[fieldId, 'state', { portalRecordFieldDisplayName: 'Subject' }],
+			[`${legacyId}.manual`, 'state', {}],
+			[manualId, 'state', {}],
+			[unownedId, 'channel', { portalRecordDisplayName: 'Manual channel' }],
+			[orphanId, 'channel', legacyNative],
+		] as const) {
+			objects.set(id, { _id: `${adapter.namespace}.${id}`, type, common: { name: id }, native });
+		}
+		states.set(fieldId, state('Legacy subject'));
+		states.set(manualId, state('Manual value'));
+		const originalGetObject = adapter.getObjectAsync;
+		adapter.getObjectAsync = id => originalGetObject(id === aliasId ? legacyId : id);
+		const originalDelete = adapter.delObjectAsync;
+		let deletionAttempts = 0;
+		const deletedIds: string[] = [];
+		adapter.delObjectAsync = (id, options) => {
+			deletedIds.push(id);
+			if (id === legacyId && deletionAttempts++ === 0) {
+				return Promise.reject(new Error('Temporary delete failure'));
+			}
+			return originalDelete(id, options);
+		};
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('[]'),
+		};
+		const refresh = (parsed: PortalParseResult): ReturnType<TestAdapter['refreshResource']> =>
+			adapter.refreshResource(
+				'messages',
+				() => Promise.resolve(response),
+				() => parsed,
+			);
+
+		const incomplete = await refresh({ status: 'invalid', kind: 'messages', reason: 'malformed-json' });
+		expect(incomplete.success).to.equal(false);
+		expect(deletionAttempts).to.equal(0);
+		expect(states.get(fieldId)?.val).to.equal('Legacy subject');
+
+		const first = await refresh({ status: 'complete', kind: 'messages', records: [record], groups: [] });
+		expect(first).to.deep.equal({ success: true, degraded: true, status: 'complete-cleanup-pending' });
+		const paths = JSON.parse(String(states.get(`${base}.recordPaths`)?.val)) as Record<string, string[]>;
+		const currentPath = paths[sourceId]?.find(path => path.toLowerCase() !== 'recordids');
+		expect(paths).to.deep.equal({ [sourceId]: ['recordids', currentPath].sort() });
+		expect(states.get(`${base}.${currentPath}.subject`)?.val).to.equal('recordIds');
+		expect(objects.has(legacyId)).to.equal(true);
+
+		const second = await refresh({ status: 'complete', kind: 'messages', records: [], groups: [] });
+		expect(second).to.deep.equal({ success: true, degraded: false, status: 'complete' });
+		expect(deletionAttempts).to.equal(2);
+		expect(deletedIds).not.to.include(aliasId);
+		expect(objects.has(legacyId)).to.equal(false);
+		expect(objects.has(fieldId)).to.equal(false);
+		expect(states.has(fieldId)).to.equal(false);
+		expect(objects.get(`${base}.recordIds`)?.type).to.equal('state');
+		expect(states.get(`${base}.recordIds`)?.val).to.equal('[]');
+		expect(states.get(`${base}.recordPaths`)?.val).to.equal('{}');
+		expect(states.get(manualId)?.val).to.equal('Manual value');
+		for (const id of [unownedId, orphanId, manualId, `${legacyId}.manual`]) {
+			expect(objects.has(id), id).to.equal(true);
+		}
 	});
 
 	it('preserves the last complete inbox when a detail aggregation fails', async () => {

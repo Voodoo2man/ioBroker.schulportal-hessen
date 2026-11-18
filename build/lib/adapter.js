@@ -185,7 +185,7 @@ function getFixedResourceChildPaths(resource, base) {
       paths.add(path);
     }
   }
-  return [...paths].map((path) => path.toLowerCase());
+  return [...paths];
 }
 function getChildLessonSection(record) {
   if (record.format !== "html") {
@@ -1937,7 +1937,9 @@ class SchulportalHessenAdapter extends utils.Adapter {
         }
         const legacyObject = await this.getObjectAsync(legacyObjectId);
         const legacyPath = legacyObjectId.startsWith(`${base}.`) ? legacyObjectId.slice(base.length + 1) : "";
-        const isReservedFixedObject = !legacyPath.includes(".") && getFixedResourceChildPaths(resource != null ? resource : "file-metadata", base).includes(legacyPath.toLowerCase());
+        const isReservedFixedObject = !legacyPath.includes(".") && getFixedResourceChildPaths(resource != null ? resource : "file-metadata", base).some(
+          (path) => path.toLowerCase() === legacyPath.toLowerCase()
+        );
         const hasRecordMetadata = typeof ((_a = legacyObject == null ? void 0 : legacyObject.native) == null ? void 0 : _a.portalRecordDisplayName) === "string" || Array.isArray((_b = legacyObject == null ? void 0 : legacyObject.native) == null ? void 0 : _b.portalRecordFieldIds);
         const legacyName = isReservedFixedObject && !hasRecordMetadata ? void 0 : (_c = legacyObject == null ? void 0 : legacyObject.common) == null ? void 0 : _c.name;
         if (typeof legacyName === "string" && legacyName !== ((_d = legacyObject == null ? void 0 : legacyObject.native) == null ? void 0 : _d.portalRecordDisplayName) && legacyName !== `Record ${record.id}`) {
@@ -2062,26 +2064,40 @@ class SchulportalHessenAdapter extends utils.Adapter {
     return failedDeletions.length > 0;
   }
   async cleanLegacyFieldsAtFixedPath(id, resource) {
-    var _a, _b;
+    var _a;
     const fixed = await this.getObjectAsync(id);
     const tracked = (_a = fixed == null ? void 0 : fixed.native) == null ? void 0 : _a.portalRecordFieldIds;
     if ((fixed == null ? void 0 : fixed.type) !== "state" && (fixed == null ? void 0 : fixed.type) !== "channel" || !Array.isArray(tracked)) {
       return;
     }
-    const protectedFields = new Set(fixed.type === "channel" ? getFixedResourceChildPaths(resource, id) : []);
+    const protectedFields = fixed.type === "channel" ? new Set(getFixedResourceChildPaths(resource, id).map((path) => path.toLowerCase())) : void 0;
+    await this.cleanTrackedRecordFields(id, tracked, protectedFields);
+  }
+  async cleanLegacyRecordAtCaseVariant(id) {
+    var _a, _b;
+    const channel = await this.getObjectAsync(id);
+    const tracked = (_a = channel == null ? void 0 : channel.native) == null ? void 0 : _a.portalRecordFieldIds;
+    if ((channel == null ? void 0 : channel.type) !== "channel" || channel._id !== `${this.namespace}.${id}` || typeof ((_b = channel.native) == null ? void 0 : _b.portalRecordDisplayName) !== "string" || !Array.isArray(tracked)) {
+      return;
+    }
+    await this.cleanTrackedRecordFields(id, tracked);
+    await this.delObjectAsync(id);
+  }
+  async cleanTrackedRecordFields(id, tracked, protectedFields) {
+    var _a;
     for (const field of new Set(tracked)) {
-      if (typeof field !== "string" || !RECORD_ID_PATTERN.test(field) || protectedFields.has(field.toLowerCase())) {
+      if (typeof field !== "string" || !RECORD_ID_PATTERN.test(field) || (protectedFields == null ? void 0 : protectedFields.has(field.toLowerCase()))) {
         continue;
       }
       const childId = `${id}.${field}`;
       const child = await this.getObjectAsync(childId);
-      if ((child == null ? void 0 : child.type) === "state" && typeof ((_b = child.native) == null ? void 0 : _b.portalRecordFieldDisplayName) === "string") {
+      if ((child == null ? void 0 : child.type) === "state" && child._id === `${this.namespace}.${childId}` && typeof ((_a = child.native) == null ? void 0 : _a.portalRecordFieldDisplayName) === "string") {
         await this.delObjectAsync(childId);
       }
     }
   }
   async commitCompleteResource(resource, records, base = getResourceBase(resource)) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const manifestId = `${base}.recordIds`;
     const previousIds = await this.readRecordManifest(manifestId);
     const previousPaths = await this.readRecordPathMapping(base);
@@ -2102,7 +2118,8 @@ class SchulportalHessenAdapter extends utils.Adapter {
       ...groupDailySubstitutionRows(records).keys()
     ]) : /* @__PURE__ */ new Set();
     const fixedResourcePaths = new Set(getFixedResourceChildPaths(resource, base));
-    const reservedFixedPaths = /* @__PURE__ */ new Set([...fixedResourcePaths, ...reservedDailyDates]);
+    const normalizedFixedPaths = new Set([...fixedResourcePaths].map((path) => path.toLowerCase()));
+    const reservedFixedPaths = /* @__PURE__ */ new Set([...normalizedFixedPaths, ...reservedDailyDates]);
     const pathReservations = [...reservedFixedPaths].map((path, index) => ({
       ownerId: `fixed:${index}:${path}`,
       path,
@@ -2174,21 +2191,25 @@ class SchulportalHessenAdapter extends utils.Adapter {
       for (const oldPath of oldPaths) {
         const normalizedOldPath = oldPath.toLowerCase();
         const [root, child] = normalizedOldPath.split(".");
-        if (currentSegments.has(normalizedOldPath) || child && (fixedResourcePaths.has(root) || currentSegments.has(root) || currentSegments.has(`${root}.${child}`)) || resource === "substitutions" && (root === "undated" && !child || reservedDailyDates.has(root) && (!child || child === "json"))) {
+        if (currentSegments.has(normalizedOldPath) || child && (normalizedFixedPaths.has(root) || currentSegments.has(root) || currentSegments.has(`${root}.${child}`)) || resource === "substitutions" && (root === "undated" && !child || reservedDailyDates.has(root) && (!child || child === "json"))) {
           continue;
         }
         try {
           const id = `${base}.${oldPath}`;
-          if (fixedResourcePaths.has(normalizedOldPath)) {
-            if (normalizedOldPath !== "records") {
+          if (fixedResourcePaths.has(oldPath)) {
+            if (oldPath !== "records") {
               await this.cleanLegacyFieldsAtFixedPath(id, resource);
+            }
+          } else if (normalizedFixedPaths.has(normalizedOldPath)) {
+            if (((_d = previousPaths.get(sourceId)) == null ? void 0 : _d.includes(oldPath)) || previousIds.includes(sourceId)) {
+              await this.cleanLegacyRecordAtCaseVariant(id);
             }
           } else {
             await this.delObjectAsync(id, { recursive: true });
           }
         } catch {
           cleanupPending = true;
-          const failedPaths = (_d = pathsToRemove.get(sourceId)) != null ? _d : /* @__PURE__ */ new Set();
+          const failedPaths = (_e = pathsToRemove.get(sourceId)) != null ? _e : /* @__PURE__ */ new Set();
           failedPaths.add(oldPath);
           pathsToRemove.set(sourceId, failedPaths);
         }
@@ -2203,7 +2224,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
     }
     const nextPaths = /* @__PURE__ */ new Map();
     for (const [sourceId, path] of currentPaths) {
-      nextPaths.set(sourceId, [path, ...(_e = pathsToRemove.get(sourceId)) != null ? _e : []]);
+      nextPaths.set(sourceId, [path, ...(_f = pathsToRemove.get(sourceId)) != null ? _f : []]);
     }
     for (const [sourceId, paths] of pathsToRemove) {
       if (!currentPaths.has(sourceId)) {

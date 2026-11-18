@@ -176,7 +176,7 @@ function getFixedResourceChildPaths(resource: PortalResourceKind, base: string):
 			paths.add(path);
 		}
 	}
-	return [...paths].map(path => path.toLowerCase());
+	return [...paths];
 }
 
 type ParsedRecord = PortalRecord;
@@ -2341,7 +2341,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				const legacyPath = legacyObjectId.startsWith(`${base}.`) ? legacyObjectId.slice(base.length + 1) : '';
 				const isReservedFixedObject =
 					!legacyPath.includes('.') &&
-					getFixedResourceChildPaths(resource ?? 'file-metadata', base).includes(legacyPath.toLowerCase());
+					getFixedResourceChildPaths(resource ?? 'file-metadata', base).some(
+						path => path.toLowerCase() === legacyPath.toLowerCase(),
+					);
 				const hasRecordMetadata =
 					typeof legacyObject?.native?.portalRecordDisplayName === 'string' ||
 					Array.isArray(legacyObject?.native?.portalRecordFieldIds);
@@ -2504,18 +2506,49 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if ((fixed?.type !== 'state' && fixed?.type !== 'channel') || !Array.isArray(tracked)) {
 			return;
 		}
-		const protectedFields = new Set(fixed.type === 'channel' ? getFixedResourceChildPaths(resource, id) : []);
+		const protectedFields =
+			fixed.type === 'channel'
+				? new Set(getFixedResourceChildPaths(resource, id).map(path => path.toLowerCase()))
+				: undefined;
+		await this.cleanTrackedRecordFields(id, tracked, protectedFields);
+	}
+
+	private async cleanLegacyRecordAtCaseVariant(id: string): Promise<void> {
+		const channel = await this.getObjectAsync(id);
+		const tracked: unknown = channel?.native?.portalRecordFieldIds;
+		if (
+			channel?.type !== 'channel' ||
+			channel._id !== `${this.namespace}.${id}` ||
+			typeof channel.native?.portalRecordDisplayName !== 'string' ||
+			!Array.isArray(tracked)
+		) {
+			return;
+		}
+		await this.cleanTrackedRecordFields(id, tracked);
+		// The record may have user-created descendants, which are not ours to delete.
+		await this.delObjectAsync(id);
+	}
+
+	private async cleanTrackedRecordFields(
+		id: string,
+		tracked: readonly unknown[],
+		protectedFields?: ReadonlySet<string>,
+	): Promise<void> {
 		for (const field of new Set(tracked)) {
 			if (
 				typeof field !== 'string' ||
 				!RECORD_ID_PATTERN.test(field) ||
-				protectedFields.has(field.toLowerCase())
+				protectedFields?.has(field.toLowerCase())
 			) {
 				continue;
 			}
 			const childId = `${id}.${field}`;
 			const child = await this.getObjectAsync(childId);
-			if (child?.type === 'state' && typeof child.native?.portalRecordFieldDisplayName === 'string') {
+			if (
+				child?.type === 'state' &&
+				child._id === `${this.namespace}.${childId}` &&
+				typeof child.native?.portalRecordFieldDisplayName === 'string'
+			) {
 				await this.delObjectAsync(childId);
 			}
 		}
@@ -2549,7 +2582,8 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 					])
 				: new Set<string>();
 		const fixedResourcePaths = new Set(getFixedResourceChildPaths(resource, base));
-		const reservedFixedPaths = new Set([...fixedResourcePaths, ...reservedDailyDates]);
+		const normalizedFixedPaths = new Set([...fixedResourcePaths].map(path => path.toLowerCase()));
+		const reservedFixedPaths = new Set([...normalizedFixedPaths, ...reservedDailyDates]);
 		const pathReservations: PathReservation[] = [...reservedFixedPaths].map((path, index) => ({
 			ownerId: `fixed:${index}:${path}`,
 			path,
@@ -2631,7 +2665,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				if (
 					currentSegments.has(normalizedOldPath) ||
 					(child &&
-						(fixedResourcePaths.has(root) ||
+						(normalizedFixedPaths.has(root) ||
 							currentSegments.has(root) ||
 							currentSegments.has(`${root}.${child}`))) ||
 					(resource === 'substitutions' &&
@@ -2642,9 +2676,13 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				}
 				try {
 					const id = `${base}.${oldPath}`;
-					if (fixedResourcePaths.has(normalizedOldPath)) {
-						if (normalizedOldPath !== 'records') {
+					if (fixedResourcePaths.has(oldPath)) {
+						if (oldPath !== 'records') {
 							await this.cleanLegacyFieldsAtFixedPath(id, resource);
+						}
+					} else if (normalizedFixedPaths.has(normalizedOldPath)) {
+						if (previousPaths.get(sourceId)?.includes(oldPath) || previousIds.includes(sourceId)) {
+							await this.cleanLegacyRecordAtCaseVariant(id);
 						}
 					} else {
 						await this.delObjectAsync(id, { recursive: true });
