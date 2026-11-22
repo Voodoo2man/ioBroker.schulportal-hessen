@@ -3,13 +3,8 @@
 # ioBroker.schulportal-hessen
 
 [![NPM version](https://img.shields.io/npm/v/iobroker.schulportal-hessen.svg)](https://www.npmjs.com/package/iobroker.schulportal-hessen)
-[![Downloads](https://img.shields.io/npm/dm/iobroker.schulportal-hessen.svg)](https://www.npmjs.com/package/iobroker.schulportal-hessen)
-![Number of Installations](https://iobroker.live/badges/schulportal-hessen-installed.svg)
-![Current version in stable repository](https://iobroker.live/badges/schulportal-hessen-stable.svg)
-
-[![NPM](https://nodei.co/npm/iobroker.schulportal-hessen.png?downloads=true)](https://nodei.co/npm/iobroker.schulportal-hessen/)
-
-**Tests:** ![Test and Release](https://github.com/Voodoo2man/ioBroker.schulportal-hessen/workflows/Test%20and%20Release/badge.svg)
+![Number of Installations](http://iobroker.live/badges/schulportal-hessen-stable.svg)
+![Number of Installations](http://iobroker.live/badges/schulportal-hessen-installed.svg)
 
 ## Overview
 
