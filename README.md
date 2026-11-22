@@ -3,7 +3,7 @@
 # ioBroker.schulportal-hessen
 
 [![NPM version](https://img.shields.io/npm/v/iobroker.schulportal-hessen.svg)](https://www.npmjs.com/package/iobroker.schulportal-hessen)
-![Number of Installations](http://iobroker.live/badges/schulportal-hessen-stable.svg)
+![Stable](http://iobroker.live/badges/schulportal-hessen-stable.svg)
 ![Number of Installations](http://iobroker.live/badges/schulportal-hessen-installed.svg)
 
 ## Overview
