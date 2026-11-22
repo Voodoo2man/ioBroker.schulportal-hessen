@@ -68,6 +68,7 @@ function getPortalDateWindow(now = /* @__PURE__ */ new Date()) {
   const day = berlinToday.getUTCDate().toString().padStart(2, "0");
   return {
     today: formatIsoDate(berlinToday),
+    tomorrow: formatIsoDate(addCalendarDays(berlinToday, 1)),
     substitutionDate: `${day}.${month}.${year}`,
     calendarStart: formatIsoDate(addCalendarDays(berlinToday, -120)),
     calendarEnd: formatIsoDate(addCalendarDays(berlinToday, 356)),

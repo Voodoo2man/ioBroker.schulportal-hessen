@@ -1092,15 +1092,17 @@ function parseAccountHtml(root) {
   return { status: "complete", kind: "account", records, groups: [] };
 }
 function parseOwnSubstitutionTables(root) {
-  var _a, _b, _c;
+  var _a, _b, _c, _d;
   const kind = "substitutions";
-  const unavailable = { status: "unavailable", kind, reason: "unsupported-html-structure" };
   if (root.querySelectorAll(".btn-ganzerplan").length > 0) {
-    return unavailable;
+    return { status: "unavailable", kind, reason: "substitution-whole-plan-button-present" };
   }
   const rawDates = allElements(root).map((element) => element.getAttribute("data-tag")).filter((value) => value !== void 0);
-  if (rawDates.length === 0 || rawDates.length > MAX_SUBSTITUTION_DATES) {
-    return unavailable;
+  if (rawDates.length === 0) {
+    return { status: "unavailable", kind, reason: "substitution-date-tags-missing" };
+  }
+  if (rawDates.length > MAX_SUBSTITUTION_DATES) {
+    return { status: "unavailable", kind, reason: "substitution-date-count-exceeded" };
   }
   const dates = rawDates.map(normalizeSubstitutionDate);
   if (dates.some((date) => date === null) || new Set(dates).size !== dates.length) {
@@ -1114,7 +1116,7 @@ function parseOwnSubstitutionTables(root) {
     }
   );
   if (tables.length === 0) {
-    return unavailable;
+    return { status: "unavailable", kind, reason: "substitution-vtable-tables-missing" };
   }
   if (tables.length !== expectedDates.size) {
     return { status: "invalid", kind, reason: "unexpected-html-structure" };
@@ -1140,8 +1142,13 @@ function parseOwnSubstitutionTables(root) {
     const parsed = parseTable(table, date, false, false, true);
     const headers = (_b = parsed.group.headers[0]) == null ? void 0 : _b.map((cell) => normalizeText(cell.text));
     const tableRows = table.querySelectorAll("tr").filter((row) => row.closest("table") === table);
-    if (!parsed.confirmedStructure || parsed.group.headers.length !== 1 || !headers || headers.length !== SUBSTITUTION_HEADERS.length || headers.some((header, index) => header !== SUBSTITUTION_HEADERS[index]) || tableRows.length !== parsed.group.headers.length + parsed.records.length || parsed.records.some((row) => row.fields.length !== SUBSTITUTION_HEADERS.length)) {
+    const emptyMessageRows = tableRows.filter(isExplicitNoSubstitutionRow);
+    const isEmptySubstitutionDay = emptyMessageRows.length === 1 && parsed.records.length === 1 && ((_c = parsed.records[0]) == null ? void 0 : _c.fields.length) === 1;
+    if (!parsed.confirmedStructure || parsed.group.headers.length !== 1 || !headers || headers.length !== SUBSTITUTION_HEADERS.length || headers.some((header, index) => header !== SUBSTITUTION_HEADERS[index]) || tableRows.length !== parsed.group.headers.length + parsed.records.length || parsed.records.some((row) => row.fields.length !== SUBSTITUTION_HEADERS.length && !isEmptySubstitutionDay)) {
       return { status: "invalid", kind, reason: "unexpected-html-structure" };
+    }
+    if (isEmptySubstitutionDay) {
+      continue;
     }
     const duplicateCounts = /* @__PURE__ */ new Map();
     for (const row of parsed.records) {
@@ -1154,7 +1161,7 @@ function parseOwnSubstitutionTables(root) {
       });
       const fields = sanitizeJsonFields({ portalDate: date, columns });
       const identity = hashId({ portalDate: date, fields });
-      const occurrence = (_c = duplicateCounts.get(identity)) != null ? _c : 0;
+      const occurrence = (_d = duplicateCounts.get(identity)) != null ? _d : 0;
       duplicateCounts.set(identity, occurrence + 1);
       const safeColumns = fields.columns;
       if (!Array.isArray(safeColumns) || safeColumns.length !== SUBSTITUTION_HEADERS.length || safeColumns.some(
@@ -1173,6 +1180,15 @@ function parseOwnSubstitutionTables(root) {
     return { status: "invalid", kind, reason: "unexpected-html-structure" };
   }
   return { status: "complete", kind, records, groups: [] };
+}
+function isExplicitNoSubstitutionRow(row) {
+  const cells = row.querySelectorAll(":scope > th, :scope > td");
+  const cell = cells[0];
+  if (cells.length !== 1 || !cell || cell.tagName !== "TD" || cell.getAttribute("colspan") !== String(SUBSTITUTION_HEADERS.length)) {
+    return false;
+  }
+  const text = normalizeText(getVisibleCellText(cell)).toLocaleLowerCase("de").normalize("NFD").replace(/[\u0300-\u036f]/gu, "");
+  return /\bkeine\b[^.!?]{0,80}\beintrag\w*\b/u.test(text) && /\bvertret\w*/u.test(text);
 }
 function parseSubstitutionDates(root) {
   const kind = "substitution-dates";

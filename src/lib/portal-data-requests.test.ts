@@ -1,10 +1,33 @@
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { expect } from 'chai';
 import type { PortalResponse, PortalReadFormRequest } from './portal-session';
 import { createPortalResourceRequests } from './portal-data-requests';
 import type { PortalReader } from './portal-data-requests';
 import { getPortalDateWindow } from './portal-dates';
-import { parsePortalResource } from './portal-parser';
+import { MAX_SUBSTITUTION_DATES, parsePortalResource } from './portal-parser';
+
+const parserModule = createRequire(__filename)('./portal-parser') as {
+	parsePortalResource: typeof parsePortalResource;
+};
+
+async function withPortalParserStub(parse: typeof parsePortalResource, run: () => Promise<void>): Promise<void> {
+	const original = parserModule.parsePortalResource;
+	parserModule.parsePortalResource = parse;
+	try {
+		await run();
+	} finally {
+		parserModule.parsePortalResource = original;
+	}
+}
+
+function substitutionDateListing(count: number): string {
+	return Array.from({ length: count }, (_, index) => {
+		const date = new Date(Date.UTC(2026, 0, index + 1));
+		const tag = `${String(date.getUTCDate()).padStart(2, '0')}_${String(date.getUTCMonth() + 1).padStart(2, '0')}_${date.getUTCFullYear()}`;
+		return `<div data-tag="${tag}"></div>`;
+	}).join('');
+}
 
 function success(contentType = 'text/html', body = ''): PortalResponse {
 	return {
@@ -398,6 +421,89 @@ describe('createPortalResourceRequests', () => {
 		}
 	});
 
+	it('adds a safe diagnostic code to an unknown substitution date-list response', async () => {
+		const privateBody = 'private-date-list-response';
+		const body = Buffer.from(privateBody, 'utf8');
+		const originalResponse: PortalResponse = {
+			status: 502,
+			classification: 'unknown',
+			contentType: 'text/plain',
+			body,
+			bodyByteLength: body.byteLength,
+			diagnosticCode: privateBody,
+		};
+		const reader: PortalReader = {
+			get: () => Promise.resolve(originalResponse),
+			postRead: () => Promise.resolve(success()),
+		};
+		const substitutions = createPortalResourceRequests(
+			reader,
+			getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+		).find(request => request.id === 'substitutions');
+
+		const response = await substitutions?.read();
+
+		expect(response).to.not.equal(originalResponse);
+		expect(response).to.deep.equal({
+			...originalResponse,
+			diagnosticCode: 'substitution-date-list-response-unknown',
+		});
+		expect(response?.body).to.equal(body);
+		expect(response?.diagnosticCode).not.to.contain(privateBody);
+	});
+
+	it('adds a safe diagnostic code to an unknown substitution-day response', async () => {
+		const privateBody = 'private-substitution-day-response';
+		const body = Buffer.from(privateBody, 'utf8');
+		const originalResponse: PortalResponse = {
+			status: 502,
+			classification: 'unknown',
+			contentType: 'text/plain',
+			body,
+			bodyByteLength: body.byteLength,
+			diagnosticCode: privateBody,
+		};
+		const reader: PortalReader = {
+			get: () => Promise.resolve(success('text/html', '<div data-tag="06_05_2026"></div>')),
+			postRead: () => Promise.resolve(originalResponse),
+		};
+		const substitutions = createPortalResourceRequests(
+			reader,
+			getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+		).find(request => request.id === 'substitutions');
+
+		const response = await substitutions?.read();
+
+		expect(response).to.not.equal(originalResponse);
+		expect(response).to.deep.equal({
+			...originalResponse,
+			diagnosticCode: 'substitution-day-response-unknown',
+		});
+		expect(response?.body).to.equal(body);
+		expect(response?.diagnosticCode).not.to.contain(privateBody);
+	});
+
+	it('leaves non-unknown substitution date-list responses unchanged', async () => {
+		const originalResponse: PortalResponse = {
+			status: 403,
+			classification: 'forbidden',
+			contentType: null,
+			body: new Uint8Array(),
+		};
+		const reader: PortalReader = {
+			get: () => Promise.resolve(originalResponse),
+			postRead: () => Promise.resolve(success()),
+		};
+		const substitutions = createPortalResourceRequests(
+			reader,
+			getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+		).find(request => request.id === 'substitutions');
+
+		const response = await substitutions?.read();
+
+		expect(response).to.equal(originalResponse);
+	});
+
 	it('retrieves substitution rows for every verified date and keeps their date context', async () => {
 		const postDates: Array<{ date: string; portalTag: string }> = [];
 		const reader: PortalReader = {
@@ -434,7 +540,7 @@ describe('createPortalResourceRequests', () => {
 		]);
 	});
 
-	it('keeps substitution data incomplete when the full-plan request returns ambiguous zero', async () => {
+	it('reports a specific reason when a substitution-day response has no date tags', async () => {
 		const reader: PortalReader = {
 			get: () => Promise.resolve(success('text/html', '<div data-tag="12_11_2026"></div>')),
 			postRead: () => Promise.resolve(success('text/html', '0')),
@@ -447,11 +553,208 @@ describe('createPortalResourceRequests', () => {
 		const response = await substitutions?.read();
 
 		expect(response?.classification).to.equal('unknown');
+		expect(response?.diagnosticCode).to.equal(
+			'substitution-day-response-unavailable-substitution-date-tags-missing',
+		);
+		expect(response?.body).to.deep.equal(new Uint8Array());
+	});
+
+	it('includes the parser reason for malformed substitution-day HTML', async () => {
+		const reader: PortalReader = {
+			get: () => Promise.resolve(success('text/html', '<div data-tag="12_11_2026"></div>')),
+			postRead: () => Promise.resolve(success('text/html', '<table><tr><td>unfinished')),
+		};
+		const substitutions = createPortalResourceRequests(
+			reader,
+			getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+		).find(request => request.id === 'substitutions');
+
+		const response = await substitutions?.read();
+
+		expect(response?.classification).to.equal('unknown');
+		expect(response?.diagnosticCode).to.equal('substitution-day-response-invalid-malformed-html');
+		expect(response?.body).to.deep.equal(new Uint8Array());
+	});
+
+	it('reports invalid substitution date-list records without exposing record values', async () => {
+		const originalParse = parserModule.parsePortalResource;
+		const invalidDateRecord = {
+			format: 'html',
+			id: 'invalid-date-record',
+			section: 'substitution-dates',
+			attributes: {},
+			fields: [],
+		};
+		const parse: typeof parsePortalResource = (kind, body, contentType) => {
+			if (kind === 'substitutions') {
+				return {
+					status: 'unavailable',
+					kind,
+					reason: 'unsupported-html-structure',
+				};
+			}
+			if (kind === 'substitution-dates') {
+				return {
+					status: 'complete',
+					kind,
+					records: [invalidDateRecord],
+					groups: [],
+				} as ReturnType<typeof parsePortalResource>;
+			}
+			return originalParse(kind, body, contentType);
+		};
+
+		await withPortalParserStub(parse, async () => {
+			const reader: PortalReader = {
+				get: () => Promise.resolve(success('text/html', 'listing')),
+				postRead: () => Promise.resolve(success('application/json', '[]')),
+			};
+			const substitutions = createPortalResourceRequests(
+				reader,
+				getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+			).find(request => request.id === 'substitutions');
+
+			const response = await substitutions?.read();
+
+			expect(response?.classification).to.equal('unknown');
+			expect(response?.diagnosticCode).to.equal('substitution-date-list-invalid');
+			expect(response?.body).to.deep.equal(new Uint8Array());
+		});
+	});
+
+	it('reports when the advertised substitution date count exceeds its limit', async () => {
+		let dayRequests = 0;
+		const reader: PortalReader = {
+			get: () => Promise.resolve(success('text/html', substitutionDateListing(MAX_SUBSTITUTION_DATES + 1))),
+			postRead: () => {
+				dayRequests++;
+				return Promise.resolve(success('application/json', '[]'));
+			},
+		};
+		const substitutions = createPortalResourceRequests(
+			reader,
+			getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+		).find(request => request.id === 'substitutions');
+
+		const response = await substitutions?.read();
+
+		expect(response?.classification).to.equal('unknown');
+		expect(response?.diagnosticCode).to.equal('substitution-date-count-exceeded');
+		expect(dayRequests).to.equal(0);
+	});
+
+	it('reports incomplete substitution-day responses without exposing response content', async () => {
+		const originalParse = parserModule.parsePortalResource;
+		const parsedDates = {
+			status: 'complete',
+			kind: 'substitution-dates',
+			records: [{ format: 'json', id: 'date', fields: { date: '06.05.2026', portalTag: '06_05_2026' } }],
+			groups: [],
+		} as ReturnType<typeof parsePortalResource>;
+		const parse: typeof parsePortalResource = (kind, body, contentType) => {
+			if (kind === 'substitutions') {
+				return { status: 'unavailable', kind, reason: 'unsupported-html-structure' };
+			}
+			if (kind === 'substitution-dates') {
+				return parsedDates;
+			}
+			return originalParse(kind, body, contentType);
+		};
+		await withPortalParserStub(parse, async () => {
+			const reader: PortalReader = {
+				get: () => Promise.resolve(success('text/html', 'listing')),
+				postRead: () => Promise.resolve(success('application/json', '[]')),
+			};
+			const substitutions = createPortalResourceRequests(
+				reader,
+				getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+			).find(request => request.id === 'substitutions');
+
+			const response = await substitutions?.read();
+
+			expect(response?.classification).to.equal('unknown');
+			expect(response?.diagnosticCode).to.equal(
+				'substitution-day-response-unavailable-unsupported-html-structure',
+			);
+			expect(response?.body).to.deep.equal(new Uint8Array());
+		});
+	});
+
+	it('reports an unexpected substitution-day record format', async () => {
+		const originalParse = parserModule.parsePortalResource;
+		const parsedDates = {
+			status: 'complete',
+			kind: 'substitution-dates',
+			records: [{ format: 'json', id: 'date', fields: { date: '06.05.2026', portalTag: '06_05_2026' } }],
+			groups: [],
+		} as ReturnType<typeof parsePortalResource>;
+		const invalidDayRecord = {
+			format: 'html',
+			id: 'invalid-day-record',
+			section: 'substitutions',
+			attributes: {},
+			fields: [],
+		};
+		const parse: typeof parsePortalResource = (kind, body, contentType) => {
+			if (kind === 'substitution-dates') {
+				return parsedDates;
+			}
+			if (kind === 'substitutions' && body === 'listing') {
+				return { status: 'unavailable', kind, reason: 'unsupported-html-structure' };
+			}
+			if (kind === 'substitutions') {
+				return {
+					status: 'complete',
+					kind,
+					records: [invalidDayRecord],
+					groups: [],
+				} as ReturnType<typeof parsePortalResource>;
+			}
+			return originalParse(kind, body, contentType);
+		};
+		await withPortalParserStub(parse, async () => {
+			const reader: PortalReader = {
+				get: () => Promise.resolve(success('text/html', 'listing')),
+				postRead: () => Promise.resolve(success('application/json', 'day')),
+			};
+			const substitutions = createPortalResourceRequests(
+				reader,
+				getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+			).find(request => request.id === 'substitutions');
+
+			const response = await substitutions?.read();
+
+			expect(response?.classification).to.equal('unknown');
+			expect(response?.diagnosticCode).to.equal('substitution-day-record-format-invalid');
+		});
+	});
+
+	it('reports when the aggregated substitution data exceeds its limit', async () => {
+		const largeDayResponse = success('application/json', JSON.stringify([{ note: 'x'.repeat(150_000) }]));
+		const reader: PortalReader = {
+			get: () => Promise.resolve(success('text/html', substitutionDateListing(MAX_SUBSTITUTION_DATES))),
+			postRead: () => Promise.resolve(largeDayResponse),
+		};
+		const substitutions = createPortalResourceRequests(
+			reader,
+			getPortalDateWindow(new Date('2026-05-06T12:00:00Z')),
+		).find(request => request.id === 'substitutions');
+
+		const response = await substitutions?.read();
+
+		expect(response?.classification).to.equal('unknown');
+		expect(response?.diagnosticCode).to.equal('substitution-aggregation-limit-exceeded');
 		expect(response?.body).to.deep.equal(new Uint8Array());
 	});
 
 	it('does not return partial substitution data after an advertised day fails', async () => {
 		let day = 0;
+		const failedResponse: PortalResponse = {
+			status: 403,
+			classification: 'forbidden',
+			contentType: null,
+			body: new Uint8Array(),
+		};
 		const reader: PortalReader = {
 			get: () =>
 				Promise.resolve(
@@ -459,11 +762,7 @@ describe('createPortalResourceRequests', () => {
 				),
 			postRead: () => {
 				day++;
-				return Promise.resolve(
-					day === 1
-						? success('application/json', '[{"Stunde":"1"}]')
-						: { status: 403, classification: 'forbidden', contentType: null, body: new Uint8Array() },
-				);
+				return Promise.resolve(day === 1 ? success('application/json', '[{"Stunde":"1"}]') : failedResponse);
 			},
 		};
 		const resources = createPortalResourceRequests(reader, getPortalDateWindow(new Date('2026-05-06T12:00:00Z')));
@@ -471,7 +770,7 @@ describe('createPortalResourceRequests', () => {
 
 		const response = await substitutions?.read();
 
-		expect(response?.classification).to.equal('forbidden');
+		expect(response).to.equal(failedResponse);
 	});
 
 	it('aggregates only each child’s personal timetable from verified detail links', async () => {

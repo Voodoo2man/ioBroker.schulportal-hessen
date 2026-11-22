@@ -7,7 +7,7 @@ import {
 } from './config-validation';
 import { getGeneratedObjectNameUpdate, planDynamicRecordSync, toSafeDynamicRecordId } from './dynamic-record-sync';
 import { allocateIdPathSegments } from './id-path-segments';
-import { getPortalDateWindow } from './portal-dates';
+import { getPortalDateWindow, type PortalDateWindow } from './portal-dates';
 import type { PortalResourceKind, PortalResourceRequest } from './portal-data-requests';
 import { createPortalResourceRequests } from './portal-data-requests';
 import { formatInvalidTimetableDiagnostic, formatOversizedResponseDiagnostic } from './portal-diagnostics';
@@ -19,6 +19,7 @@ import {
 	type ChildLessonSection,
 	type PortalChildLessons,
 	type PortalChildTimetable,
+	type PortalHtmlRecord,
 	type PortalRecord,
 } from './portal-parser';
 
@@ -36,6 +37,8 @@ const SUBSTITUTION_COLUMN_ALIASES = {
 } as const;
 type DailySubstitutionField = (typeof SUBSTITUTION_COLUMN_ALIASES)[keyof typeof SUBSTITUTION_COLUMN_ALIASES];
 type DailySubstitutionRow = Record<DailySubstitutionField, string>;
+const SUBSTITUTION_DAY_ALIASES = { today: 'Today', tomorrow: 'Tomorrow' } as const;
+type SubstitutionDayWindow = Pick<PortalDateWindow, keyof typeof SUBSTITUTION_DAY_ALIASES>;
 const ACCOUNT_NAME_STATE = 'info.accountName';
 const ACCOUNT_TYPE_STATE = 'info.accountType';
 const ROOT_LAST_ERROR_STATE = 'info.lastError';
@@ -87,15 +90,40 @@ function getSubstitutionRecordDate(record: PortalRecord): string | null {
 	return record.format === 'json' ? getSubstitutionIsoDate(record.fields.portalDate) : null;
 }
 
-function groupDailySubstitutionRows(records: readonly PortalRecord[]): Map<string, DailySubstitutionRow[]> {
-	const groups = new Map<string, DailySubstitutionRow[]>();
+function isSubstitutionDayAlias(path: string): path is keyof typeof SUBSTITUTION_DAY_ALIASES {
+	return Object.hasOwn(SUBSTITUTION_DAY_ALIASES, path);
+}
+
+function getSubstitutionDayChannel(date: string, window: SubstitutionDayWindow): string {
+	return date === window.today ? 'today' : date === window.tomorrow ? 'tomorrow' : date;
+}
+
+function getSubstitutionDayChannelName(path: string): string {
+	return isSubstitutionDayAlias(path)
+		? SUBSTITUTION_DAY_ALIASES[path]
+		: path === 'undated'
+			? 'Undated substitutions'
+			: path;
+}
+
+function groupDailySubstitutionRows(
+	records: readonly PortalRecord[],
+	window: SubstitutionDayWindow,
+): Map<string, DailySubstitutionRow[]> {
+	const groups = new Map<string, DailySubstitutionRow[]>(
+		Object.keys(SUBSTITUTION_DAY_ALIASES).map(alias => [alias, []]),
+	);
 	for (const record of records) {
 		const date = getSubstitutionRecordDate(record);
 		if (!date) {
 			continue;
 		}
-		const dateRows = groups.get(date) ?? [];
-		groups.set(date, dateRows);
+		const channels = new Set([date, getSubstitutionDayChannel(date, window)]);
+		for (const channel of channels) {
+			if (!groups.has(channel)) {
+				groups.set(channel, []);
+			}
+		}
 		const columns = record.format === 'json' ? record.fields.columns : undefined;
 		if (!Array.isArray(columns)) {
 			continue;
@@ -122,7 +150,9 @@ function groupDailySubstitutionRows(records: readonly PortalRecord[]): Map<strin
 				row[SUBSTITUTION_COLUMN_ALIASES[header]] = pair.value;
 			}
 		}
-		dateRows.push(row);
+		for (const channel of channels) {
+			groups.get(channel)?.push(row);
+		}
 	}
 	return groups;
 }
@@ -566,7 +596,8 @@ function isTimetablePeriodHeader(header: string): boolean {
 function getVerifiedTimetablePeriodNumber(value: string): string | null {
 	const normalized = value.replace(/\s+/gu, ' ').trim();
 	const match =
-		/^\s*(\d{1,2})(?:(?:\s*\(\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*\))|(?:\s+((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)(?:\s+(\d{1,2})\.)?))?$/u.exec(
+		/^\s*(\d{1,2})\.?$/u.exec(normalized) ??
+		/^\s*(\d{1,2})(?:(?:\s*\(\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)\s*\))|(?:\s+((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)(?:\s+(\d{1,2})\.?)?))?$/u.exec(
 			normalized,
 		);
 	if (!match) {
@@ -597,22 +628,32 @@ function getVerifiedTimetablePeriodNumber(value: string): string | null {
 	return String(period);
 }
 
-function getRecordTimetablePeriodNumber(record: PortalRecord): string | null {
+function getRecordTimetablePeriod(
+	record: PortalRecord,
+): { field: PortalHtmlRecord['fields'][number]; number: string } | null {
 	if (record.format !== 'html') {
 		return null;
 	}
 	const periodFields = record.fields.filter(
 		field => typeof field.header === 'string' && isTimetablePeriodHeader(field.header),
 	);
-	return periodFields.length === 1 ? getVerifiedTimetablePeriodNumber(periodFields[0].text) : null;
+	if (periodFields.length !== 1) {
+		return null;
+	}
+	const [field] = periodFields;
+	if (!field) {
+		return null;
+	}
+	const number = getVerifiedTimetablePeriodNumber(field.text);
+	return number === null ? null : { field, number };
 }
 
 function getTimetableLessonIds(records: readonly PortalRecord[]): string[] {
 	const occurrences = new Map<string, number>();
 	return records.map((record, index) => {
-		const period = getRecordTimetablePeriodNumber(record);
+		const period = getRecordTimetablePeriod(record);
 		if (period !== null) {
-			const base = period.padStart(2, '0');
+			const base = period.number.padStart(2, '0');
 			const occurrence = (occurrences.get(base) ?? 0) + 1;
 			occurrences.set(base, occurrence);
 			return occurrence === 1 ? base : `${base}_${occurrence}`;
@@ -696,11 +737,15 @@ function getRecordFieldDescriptors(record: PortalRecord, resource?: PortalResour
 	const usedIds = new Set<string>();
 	if (record.format === 'html') {
 		const previousIds = new Set<string>();
-		const timetablePeriodNumber = resource === 'timetable' ? getRecordTimetablePeriodNumber(record) : null;
+		const timetablePeriod = resource === 'timetable' ? getRecordTimetablePeriod(record) : null;
 		return record.fields.flatMap((field, index) => {
 			const isPeriodField =
 				resource === 'timetable' && field.header !== null && isTimetablePeriodHeader(field.header);
-			const value = isPeriodField ? timetablePeriodNumber : field.text;
+			const value = isPeriodField
+				? timetablePeriod?.field === field
+					? timetablePeriod.number
+					: null
+				: field.text;
 			return typeof value === 'string'
 				? [getColumnDescriptor(field.header, index, value, usedIds, previousIds)]
 				: [];
@@ -1027,7 +1072,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		await this.ensureState(ACCOUNT_NAME_STATE, 'Account display name', 'string', 'text', '');
 		await this.setAckState(ACCOUNT_NAME_STATE, this.config.accountName?.trim() ?? '');
 		await this.ensureState(ACCOUNT_TYPE_STATE, 'Account type', 'string', 'text', '');
-		await this.ensureState(ROOT_LAST_UPDATE_STATE, 'Last successful data update', 'number', 'value.time', 0, 'ms');
+		await this.ensureTimestampState(ROOT_LAST_UPDATE_STATE, 'Last successful data update');
 		await this.ensureState(REFRESH_STATE, 'Refresh now', 'boolean', 'button', false, undefined, true);
 		await this.ensureState(ROOT_LAST_ERROR_STATE, 'Last safe error code', 'string', 'text', '');
 		await this.ensureChannel('profile', 'Profile');
@@ -1104,7 +1149,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if (resource === 'messages') {
 			await this.ensureState(`${base}.unreadCount`, 'Unread message count', 'number', 'value', 0);
 		}
-		await this.ensureState(`${base}.lastUpdate`, 'Last successful data update', 'number', 'value.time', 0, 'ms');
+		await this.ensureTimestampState(`${base}.lastUpdate`, 'Last successful data update');
 		await this.ensureState(`${base}.json`, 'Complete data (JSON)', 'string', 'json', '[]');
 		if (resource === 'messages' && base === INBOX_BASE) {
 			for (const category of INBOX_CATEGORIES) {
@@ -1193,6 +1238,22 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if (!(await this.getStateAsync(id))) {
 			await this.setAckState(id, defaultValue);
 		}
+	}
+
+	private async ensureTimestampState(id: string, name: string): Promise<void> {
+		await this.ensureState(id, name, 'number', 'value.time', 0);
+		const existing = await this.getObjectAsync(id);
+		if (!existing || existing.type !== 'state' || !Object.prototype.hasOwnProperty.call(existing.common, 'unit')) {
+			return;
+		}
+
+		const { _id, ...object } = existing;
+		if (!_id) {
+			return;
+		}
+		const common = { ...object.common };
+		delete common.unit;
+		await this.setObjectAsync(id, { ...object, common });
 	}
 
 	private async setAckState(id: string, value: string | number | boolean): Promise<void> {
@@ -1320,7 +1381,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				if (this.unloading) {
 					break;
 				}
-				const result = await this.refreshResource(request.id, request.read, request.parse);
+				const result = await this.refreshResource(request.id, request.read, request.parse, dateWindow);
 				if (result.success) {
 					successfulResources++;
 				}
@@ -1378,6 +1439,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		resource: PortalResourceKind,
 		read: () => ReturnType<PortalSession['get']>,
 		parse?: PortalResourceRequest['parse'],
+		dateWindow?: SubstitutionDayWindow,
 	): Promise<{ success: boolean; degraded: boolean; status: string }> {
 		const base = getResourceBase(resource);
 		try {
@@ -1500,7 +1562,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			const cleanupPending =
 				resource === 'messages'
 					? await this.commitMessageCategories(rootRecords)
-					: await this.commitCompleteResource(resource, rootRecords);
+					: await this.commitCompleteResource(resource, rootRecords, base, dateWindow);
 			const cleanupPendingAny = cleanupPending || childCleanupPending || childTimetableCleanupPending;
 			const status = cleanupPendingAny ? 'complete-cleanup-pending' : 'complete';
 			const updatedAt = Date.now();
@@ -2152,14 +2214,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			await this.ensureState(`${infoBase}.id`, 'Readable student ID', 'string', 'text', '');
 			await this.ensureState(`${infoBase}.name`, 'Student name', 'string', 'text', '');
 			await this.ensureState(`${infoBase}.status`, 'Student data status', 'string', 'text', 'not-updated');
-			await this.ensureState(
-				`${infoBase}.lastUpdate`,
-				'Last successful student update',
-				'number',
-				'value.time',
-				0,
-				'ms',
-			);
+			await this.ensureTimestampState(`${infoBase}.lastUpdate`, 'Last successful student update');
 			await this.setAckState(`${infoBase}.id`, childPath);
 			await this.setAckState(`${infoBase}.name`, child.name);
 
@@ -2341,9 +2396,10 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				const legacyPath = legacyObjectId.startsWith(`${base}.`) ? legacyObjectId.slice(base.length + 1) : '';
 				const isReservedFixedObject =
 					!legacyPath.includes('.') &&
-					getFixedResourceChildPaths(resource ?? 'file-metadata', base).some(
-						path => path.toLowerCase() === legacyPath.toLowerCase(),
-					);
+					((resource === 'substitutions' && isSubstitutionDayAlias(legacyPath)) ||
+						getFixedResourceChildPaths(resource ?? 'file-metadata', base).some(
+							path => path.toLowerCase() === legacyPath.toLowerCase(),
+						));
 				const hasRecordMetadata =
 					typeof legacyObject?.native?.portalRecordDisplayName === 'string' ||
 					Array.isArray(legacyObject?.native?.portalRecordFieldIds);
@@ -2513,7 +2569,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		await this.cleanTrackedRecordFields(id, tracked, protectedFields);
 	}
 
-	private async cleanLegacyRecordAtCaseVariant(id: string): Promise<void> {
+	private async cleanTrackedLegacyRecordChannel(id: string): Promise<void> {
 		const channel = await this.getObjectAsync(id);
 		const tracked: unknown = channel?.native?.portalRecordFieldIds;
 		if (
@@ -2558,7 +2614,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		resource: PortalResourceKind,
 		records: readonly ParsedRecord[],
 		base = getResourceBase(resource),
+		dateWindow?: SubstitutionDayWindow,
 	): Promise<boolean> {
+		const substitutionWindow = resource === 'substitutions' ? (dateWindow ?? getPortalDateWindow()) : undefined;
 		const manifestId = `${base}.recordIds`;
 		const previousIds = await this.readRecordManifest(manifestId);
 		const previousPaths = await this.readRecordPathMapping(base);
@@ -2574,13 +2632,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if (!plan) {
 			return false;
 		}
-		const reservedDailyDates =
-			resource === 'substitutions'
-				? new Set([
-						...(await this.readDailySubstitutionDates(`${base}.dailyJsonDates`)),
-						...groupDailySubstitutionRows(records).keys(),
-					])
-				: new Set<string>();
+		const dailyGroups = substitutionWindow ? groupDailySubstitutionRows(records, substitutionWindow) : undefined;
+		const previousDailyDates = dailyGroups ? await this.readDailySubstitutionDates(`${base}.dailyJsonDates`) : [];
+		const reservedDailyDates = new Set([...previousDailyDates, ...(dailyGroups?.keys() ?? [])]);
 		const fixedResourcePaths = new Set(getFixedResourceChildPaths(resource, base));
 		const normalizedFixedPaths = new Set([...fixedResourcePaths].map(path => path.toLowerCase()));
 		const reservedFixedPaths = new Set([...normalizedFixedPaths, ...reservedDailyDates]);
@@ -2597,23 +2651,22 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				}
 			}
 		}
-		const currentPaths =
-			resource === 'substitutions'
-				? getSubstitutionRecordPaths(records)
-				: allocateSegmentsWithReservations(pathEntries, pathReservations);
+		const currentPaths = substitutionWindow
+			? getSubstitutionRecordPaths(records)
+			: allocateSegmentsWithReservations(pathEntries, pathReservations);
 		const currentSegments = new Set([...currentPaths.values()].map(path => path.toLowerCase()));
 		const dataJson = JSON.stringify(records);
 		if (typeof dataJson !== 'string') {
 			throw new Error('Invalid JSON data');
 		}
 
-		if (resource === 'substitutions') {
-			const parentChannels = new Set([...currentPaths.values()].map(path => path.split('.')[0]));
+		if (dailyGroups) {
+			const parentChannels = new Set([
+				...dailyGroups.keys(),
+				...[...currentPaths.values()].map(path => path.split('.')[0]),
+			]);
 			for (const parentChannel of parentChannels) {
-				await this.ensureChannel(
-					`${base}.${parentChannel}`,
-					parentChannel === 'undated' ? 'Undated substitutions' : parentChannel,
-				);
+				await this.ensureChannel(`${base}.${parentChannel}`, getSubstitutionDayChannelName(parentChannel));
 			}
 		}
 
@@ -2630,7 +2683,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 			}
 			const legacyObjectIds = [
 				`${base}.${sourceId}`,
-				...(previousPaths.get(sourceId) ?? []).map(path => `${base}.${path}`),
+				...(previousPaths.get(sourceId) ?? [])
+					.filter(path => !dailyGroups || !currentSegments.has(path.toLowerCase()))
+					.map(path => `${base}.${path}`),
 				`${base}.records.${sourceId}`,
 			];
 			cleanupPending =
@@ -2643,8 +2698,9 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 					resource,
 				)) || cleanupPending;
 		}
-		if (resource === 'substitutions') {
-			cleanupPending = (await this.commitDailySubstitutionJson(records)) || cleanupPending;
+		if (dailyGroups) {
+			cleanupPending =
+				(await this.commitDailySubstitutionJson(base, dailyGroups, previousDailyDates)) || cleanupPending;
 		}
 		await this.setAckState(`${base}.json`, dataJson);
 		if (resource === 'messages') {
@@ -2682,7 +2738,11 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 						}
 					} else if (normalizedFixedPaths.has(normalizedOldPath)) {
 						if (previousPaths.get(sourceId)?.includes(oldPath) || previousIds.includes(sourceId)) {
-							await this.cleanLegacyRecordAtCaseVariant(id);
+							await this.cleanTrackedLegacyRecordChannel(id);
+						}
+					} else if (reservedDailyDates.has(root)) {
+						if (oldPath === `${root}.${child}`) {
+							await this.cleanTrackedLegacyRecordChannel(id);
 						}
 					} else {
 						await this.delObjectAsync(id, { recursive: true });
@@ -2721,28 +2781,23 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		return cleanupPending;
 	}
 
-	private async commitDailySubstitutionJson(records: readonly PortalRecord[]): Promise<boolean> {
-		const base = getResourceBase('substitutions');
+	private async commitDailySubstitutionJson(
+		base: string,
+		groups: ReadonlyMap<string, readonly DailySubstitutionRow[]>,
+		previousDates: readonly string[],
+	): Promise<boolean> {
 		const manifestId = `${base}.dailyJsonDates`;
-		const previousDates = await this.readDailySubstitutionDates(manifestId);
-		const groups = groupDailySubstitutionRows(records);
-		const currentDates = [...groups.keys()].sort();
-		for (const date of currentDates) {
-			const channelId = `${base}.${date}`;
-			await this.ensureChannel(channelId, date);
-			const stateId = `${channelId}.json`;
-			await this.ensureState(stateId, `Substitutions for ${date} (JSON)`, 'string', 'json', '[]');
-			const dataJson = JSON.stringify(groups.get(date));
-			if (typeof dataJson !== 'string') {
-				throw new Error('Invalid daily substitution JSON');
-			}
-			await this.setAckState(stateId, dataJson);
+		for (const [channel, rows] of groups) {
+			const stateId = `${base}.${channel}.json`;
+			await this.ensureState(stateId, `Substitutions for ${channel} (JSON)`, 'string', 'json', '[]');
+			await this.setAckState(stateId, JSON.stringify(rows));
 		}
 
-		const currentDateSet = new Set(currentDates);
+		// Only dated channels can expire; the two relative aliases always remain live.
+		const currentDates = [...groups.keys()].filter(isIsoCalendarDate);
 		const failedDeletions: string[] = [];
 		for (const date of previousDates) {
-			if (currentDateSet.has(date)) {
+			if (groups.has(date)) {
 				continue;
 			}
 			try {
@@ -2751,7 +2806,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				failedDeletions.push(date);
 			}
 		}
-		await this.setAckState(manifestId, JSON.stringify([...new Set([...currentDates, ...failedDeletions])].sort()));
+		await this.setAckState(manifestId, JSON.stringify([...currentDates, ...failedDeletions].sort()));
 		return failedDeletions.length > 0;
 	}
 

@@ -2,6 +2,8 @@
 export interface PortalDateWindow {
 	/** Current Berlin-local date in YYYY-MM-DD form. */
 	today: string;
+	/** Next Berlin-local calendar date in YYYY-MM-DD form. */
+	tomorrow: string;
 	/** Current Berlin-local date in DD.MM.YYYY form. */
 	substitutionDate: string;
 	/** Inclusive calendar query start, 120 calendar days before today. */
@@ -74,6 +76,7 @@ export function getPortalDateWindow(now = new Date()): PortalDateWindow {
 	const day = berlinToday.getUTCDate().toString().padStart(2, '0');
 	return {
 		today: formatIsoDate(berlinToday),
+		tomorrow: formatIsoDate(addCalendarDays(berlinToday, 1)),
 		substitutionDate: `${day}.${month}.${year}`,
 		calendarStart: formatIsoDate(addCalendarDays(berlinToday, -120)),
 		calendarEnd: formatIsoDate(addCalendarDays(berlinToday, 356)),

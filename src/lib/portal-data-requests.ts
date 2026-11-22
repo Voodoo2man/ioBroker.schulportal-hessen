@@ -1055,7 +1055,9 @@ async function readSchoolCalendar(reader: PortalReader, year: number): Promise<P
 async function readSubstitutions(reader: PortalReader): Promise<PortalResponse> {
 	const dateList = await reader.get('/vertretungsplan.php');
 	if (dateList.classification !== 'success') {
-		return dateList;
+		return dateList.classification === 'unknown'
+			? { ...dateList, diagnosticCode: 'substitution-date-list-response-unknown' }
+			: dateList;
 	}
 
 	const listingBody = Buffer.from(dateList.body).toString('utf8');
@@ -1079,15 +1081,20 @@ async function readSubstitutions(reader: PortalReader): Promise<PortalResponse> 
 		}
 		return [{ date: record.fields.date, portalTag: record.fields.portalTag }];
 	});
-	if (dates.length !== parsedDates.records.length || dates.length > MAX_SUBSTITUTION_DATES) {
-		return incompleteAggregation();
+	if (dates.length !== parsedDates.records.length) {
+		return incompleteAggregation('substitution-date-list-invalid');
+	}
+	if (dates.length > MAX_SUBSTITUTION_DATES) {
+		return incompleteAggregation('substitution-date-count-exceeded');
 	}
 
 	const substitutions: Record<string, unknown>[] = [];
 	for (const { date, portalTag } of dates) {
 		const response = await reader.postRead({ type: 'substitution-day', date, portalTag });
 		if (response.classification !== 'success') {
-			return response;
+			return response.classification === 'unknown'
+				? { ...response, diagnosticCode: 'substitution-day-response-unknown' }
+				: response;
 		}
 		const parsedDay = parsePortalResource(
 			'substitutions',
@@ -1095,11 +1102,11 @@ async function readSubstitutions(reader: PortalReader): Promise<PortalResponse> 
 			response.contentType ?? undefined,
 		);
 		if (parsedDay.status !== 'complete') {
-			return incompleteAggregation();
+			return incompleteAggregation(`substitution-day-response-${parsedDay.status}-${parsedDay.reason}`);
 		}
 		for (const record of parsedDay.records) {
 			if (record.format !== 'json') {
-				return incompleteAggregation();
+				return incompleteAggregation('substitution-day-record-format-invalid');
 			}
 			substitutions.push({ ...record.fields, portalDate: date });
 		}
@@ -1107,7 +1114,7 @@ async function readSubstitutions(reader: PortalReader): Promise<PortalResponse> 
 
 	const body = Buffer.from(JSON.stringify(substitutions), 'utf8');
 	if (body.byteLength > 4 * 1024 * 1024) {
-		return incompleteAggregation();
+		return incompleteAggregation('substitution-aggregation-limit-exceeded');
 	}
 	return { status: 200, classification: 'success', contentType: 'application/json', body };
 }

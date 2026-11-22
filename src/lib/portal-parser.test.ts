@@ -790,6 +790,30 @@ describe('parsePortalResource', () => {
 		});
 	});
 
+	it('accepts a recognized empty day in a date-matched substitution overview', () => {
+		const headers = ['', 'Stunde', 'Klasse', 'Vertretung', 'Lehrkraft', 'Fach', 'Raum', 'Hinweis'];
+		const headerRow = `<thead><tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr></thead>`;
+		const populatedRow =
+			'<tr><td></td><td>1</td><td>Class A</td><td>Coverage A</td><td>Teacher A</td><td>Math</td><td>Room 1</td><td></td></tr>';
+		const body =
+			'<html><body><button data-tag="23_11_2026">Day A</button><button data-tag="24_11_2026">Day B</button>' +
+			`<table id="vtable23_11_2026">${headerRow}<tbody>${populatedRow}</tbody></table>` +
+			`<table id="vtable24_11_2026">${headerRow}<tbody><tr><td colspan="8">Keine Demo-Einträge zum Muster-Vertretungsplan.</td></tr></tbody></table>` +
+			'</body></html>';
+
+		const result = parsePortalResource('substitutions', body, 'text/html');
+
+		expect(result.status).to.equal('complete');
+		if (result.status !== 'complete') {
+			return;
+		}
+		expect(result.records).to.have.length(1);
+		expect(result.records[0]?.format).to.equal('json');
+		if (result.records[0]?.format === 'json') {
+			expect(result.records[0].fields.portalDate).to.equal('23.11.2026');
+		}
+	});
+
 	it('does not parse own-plan listings above the existing date limit', () => {
 		const headers = ['', 'Stunde', 'Klasse', 'Vertretung', 'Lehrkraft', 'Fach', 'Raum', 'Hinweis'];
 		const headerRow = `<thead><tr>${headers.map(header => `<th>${header}</th>`).join('')}</tr></thead>`;
@@ -809,7 +833,7 @@ describe('parsePortalResource', () => {
 		expect(parsePortalResource('substitutions', body, 'text/html')).to.deep.equal({
 			status: 'unavailable',
 			kind: 'substitutions',
-			reason: 'unsupported-html-structure',
+			reason: 'substitution-date-count-exceeded',
 		});
 	});
 
@@ -845,12 +869,14 @@ describe('parsePortalResource', () => {
 		expect(parsePortalResource('substitutions', tag, 'text/html')).to.deep.equal({
 			status: 'unavailable',
 			kind: 'substitutions',
-			reason: 'unsupported-html-structure',
+			reason: 'substitution-vtable-tables-missing',
 		});
 		for (const body of [
 			`${tag}${makeTable('vtable13_11_2026')}`,
 			`${tag}${makeTable('vtable12_11_2026', headerCells.replace('<th>Hinweis</th>', '<th>Notiz</th>'))}`,
 			`${tag}${makeTable('vtable12_11_2026', headerCells, '<tr><td>Incomplete row</td></tr>')}`,
+			`${tag}${makeTable('vtable12_11_2026', headerCells, '<tr><td colspan="8">Maintenance notice</td></tr>')}`,
+			`${tag}${makeTable('vtable12_11_2026', headerCells, '<tr><td colspan="8">Keine Demo-Einträge heute.</td></tr>')}`,
 		]) {
 			expect(parsePortalResource('substitutions', body, 'text/html')).to.deep.equal({
 				status: 'invalid',
@@ -861,13 +887,24 @@ describe('parsePortalResource', () => {
 		expect(
 			parsePortalResource(
 				'substitutions',
+				`${makeTable('vtable12_11_2026', headerCells, '<tr><td colspan="8">Keine Demo-Einträge zum Muster-Vertretungsplan.</td></tr>')}`,
+				'text/html',
+			),
+		).to.deep.equal({
+			status: 'unavailable',
+			kind: 'substitutions',
+			reason: 'substitution-date-tags-missing',
+		});
+		expect(
+			parsePortalResource(
+				'substitutions',
 				`${tag}<button class="btn-ganzerplan">Full plan</button>${makeTable('vtable12_11_2026')}`,
 				'text/html',
 			),
 		).to.deep.equal({
 			status: 'unavailable',
 			kind: 'substitutions',
-			reason: 'unsupported-html-structure',
+			reason: 'substitution-whole-plan-button-present',
 		});
 	});
 
@@ -875,7 +912,7 @@ describe('parsePortalResource', () => {
 		expect(parsePortalResource('substitutions', '0', 'text/html')).to.deep.equal({
 			status: 'unavailable',
 			kind: 'substitutions',
-			reason: 'unsupported-html-structure',
+			reason: 'substitution-date-tags-missing',
 		});
 		for (const body of ['0', '1']) {
 			expect(parsePortalResource('substitutions', body, 'application/json')).to.deep.equal({

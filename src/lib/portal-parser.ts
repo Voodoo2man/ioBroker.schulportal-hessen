@@ -170,6 +170,10 @@ export type PortalParseResult =
 				| 'permission-denied'
 				| 'feature-unavailable'
 				| 'unsupported-html-structure'
+				| 'substitution-whole-plan-button-present'
+				| 'substitution-date-tags-missing'
+				| 'substitution-date-count-exceeded'
+				| 'substitution-vtable-tables-missing'
 				| 'unrecognized-json-structure';
 	  }
 	| {
@@ -1488,16 +1492,18 @@ function parseAccountHtml(root: HTMLElement): PortalParseResult {
 
 function parseOwnSubstitutionTables(root: HTMLElement): PortalParseResult {
 	const kind = 'substitutions';
-	const unavailable: PortalParseResult = { status: 'unavailable', kind, reason: 'unsupported-html-structure' };
 	if (root.querySelectorAll('.btn-ganzerplan').length > 0) {
-		return unavailable;
+		return { status: 'unavailable', kind, reason: 'substitution-whole-plan-button-present' };
 	}
 
 	const rawDates = allElements(root)
 		.map(element => element.getAttribute('data-tag'))
 		.filter((value): value is string => value !== undefined);
-	if (rawDates.length === 0 || rawDates.length > MAX_SUBSTITUTION_DATES) {
-		return unavailable;
+	if (rawDates.length === 0) {
+		return { status: 'unavailable', kind, reason: 'substitution-date-tags-missing' };
+	}
+	if (rawDates.length > MAX_SUBSTITUTION_DATES) {
+		return { status: 'unavailable', kind, reason: 'substitution-date-count-exceeded' };
 	}
 	const dates = rawDates.map(normalizeSubstitutionDate);
 	if (dates.some(date => date === null) || new Set(dates).size !== dates.length) {
@@ -1508,7 +1514,7 @@ function parseOwnSubstitutionTables(root: HTMLElement): PortalParseResult {
 		element => element.tagName === 'TABLE' && (element.getAttribute('id') ?? '').startsWith('vtable'),
 	);
 	if (tables.length === 0) {
-		return unavailable;
+		return { status: 'unavailable', kind, reason: 'substitution-vtable-tables-missing' };
 	}
 	if (tables.length !== expectedDates.size) {
 		return { status: 'invalid', kind, reason: 'unexpected-html-structure' };
@@ -1536,6 +1542,9 @@ function parseOwnSubstitutionTables(root: HTMLElement): PortalParseResult {
 		const parsed = parseTable(table, date, false, false, true);
 		const headers = parsed.group.headers[0]?.map(cell => normalizeText(cell.text));
 		const tableRows = table.querySelectorAll('tr').filter(row => row.closest('table') === table);
+		const emptyMessageRows = tableRows.filter(isExplicitNoSubstitutionRow);
+		const isEmptySubstitutionDay =
+			emptyMessageRows.length === 1 && parsed.records.length === 1 && parsed.records[0]?.fields.length === 1;
 		if (
 			!parsed.confirmedStructure ||
 			parsed.group.headers.length !== 1 ||
@@ -1543,9 +1552,13 @@ function parseOwnSubstitutionTables(root: HTMLElement): PortalParseResult {
 			headers.length !== SUBSTITUTION_HEADERS.length ||
 			headers.some((header, index) => header !== SUBSTITUTION_HEADERS[index]) ||
 			tableRows.length !== parsed.group.headers.length + parsed.records.length ||
-			parsed.records.some(row => row.fields.length !== SUBSTITUTION_HEADERS.length)
+			parsed.records.some(row => row.fields.length !== SUBSTITUTION_HEADERS.length && !isEmptySubstitutionDay)
 		) {
 			return { status: 'invalid', kind, reason: 'unexpected-html-structure' };
+		}
+
+		if (isEmptySubstitutionDay) {
+			continue;
 		}
 
 		const duplicateCounts = new Map<string, number>();
@@ -1582,6 +1595,25 @@ function parseOwnSubstitutionTables(root: HTMLElement): PortalParseResult {
 		return { status: 'invalid', kind, reason: 'unexpected-html-structure' };
 	}
 	return { status: 'complete', kind, records, groups: [] };
+}
+
+function isExplicitNoSubstitutionRow(row: HTMLElement): boolean {
+	const cells = row.querySelectorAll(':scope > th, :scope > td');
+	const cell = cells[0];
+	if (
+		cells.length !== 1 ||
+		!cell ||
+		cell.tagName !== 'TD' ||
+		cell.getAttribute('colspan') !== String(SUBSTITUTION_HEADERS.length)
+	) {
+		return false;
+	}
+
+	const text = normalizeText(getVisibleCellText(cell))
+		.toLocaleLowerCase('de')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/gu, '');
+	return /\bkeine\b[^.!?]{0,80}\beintrag\w*\b/u.test(text) && /\bvertret\w*/u.test(text);
 }
 
 function parseSubstitutionDates(root: HTMLElement): PortalParseResult {

@@ -12,6 +12,9 @@ import type {
 } from './portal-parser';
 import type { PortalResponse } from './portal-session';
 import { allocateIdPathSegments } from './id-path-segments';
+import { getPortalDateWindow, type PortalDateWindow } from './portal-dates';
+
+const BEFORE_TEST_SUBSTITUTION_DATES = getPortalDateWindow(new Date('2026-11-10T12:00:00Z'));
 
 const loadModule = createRequire(__filename);
 const moduleLoader = Module as unknown as {
@@ -44,6 +47,8 @@ interface TestAdapter {
 	onReady(): Promise<void>;
 	onUnload(callback: () => void): Promise<void>;
 	refreshAccount(): Promise<void>;
+	updateAccount(): Promise<{ connected: boolean; degraded: boolean; updated: boolean; lastError: string }>;
+	activeRefresh: Promise<void> | null;
 	setTimeout(callback: () => void, delay: number): ioBroker.Timeout;
 	clearTimeout(timer: ioBroker.Timeout): void;
 	subscribeStates(id: string): void;
@@ -52,18 +57,27 @@ interface TestAdapter {
 	onStateChange(id: string, state: ioBroker.State | null | undefined): void;
 	requestRefresh(): Promise<void>;
 	getObjectAsync(id: string): Promise<ioBroker.Object | null | undefined>;
+	setObjectAsync(id: string, object: ioBroker.SettableObject): Promise<void>;
 	setObjectNotExistsAsync(id: string, object: ioBroker.SettableObject): Promise<void>;
 	extendObjectAsync(id: string, object: ioBroker.PartialObject): Promise<void>;
 	getStateAsync(id: string): Promise<ioBroker.State | null | undefined>;
 	setStateAsync(id: string, state: ioBroker.SettableState): Promise<void>;
 	delObjectAsync(id: string, options?: { recursive?: boolean }): Promise<void>;
 	commitChildLessons(children: readonly PortalChildLessons[]): Promise<boolean>;
+	commitChildTimetables(
+		children: readonly {
+			child: PortalChildTimetable;
+			childPath: string;
+			buckets: { today: PortalRecord[]; tomorrow: PortalRecord[]; week: Record<string, PortalRecord[]> };
+		}[],
+	): Promise<boolean>;
 	createObjectTree(): Promise<void>;
 	getBerlinToday(): string;
 	refreshResource(
 		resource: PortalResourceKind,
 		read: () => Promise<PortalResponse>,
 		parse?: () => PortalParseResult,
+		dateWindow?: Pick<PortalDateWindow, 'today' | 'tomorrow'>,
 	): Promise<{ success: boolean; degraded: boolean; status: string }>;
 }
 
@@ -112,6 +126,10 @@ function makeTestAdapter(): {
 		return Promise.resolve();
 	};
 	adapter.getStateAsync = id => Promise.resolve(states.get(id) ?? null);
+	adapter.setObjectAsync = (id, object) => {
+		objects.set(id, { _id: id, ...(object as unknown as Omit<StoredObject, '_id'>) });
+		return Promise.resolve();
+	};
 	adapter.setStateAsync = (id, state) => {
 		states.set(id, { ...states.get(id), ...state } as ioBroker.State);
 		return Promise.resolve();
@@ -327,6 +345,51 @@ describe('completion-based refresh scheduling', () => {
 		expect(timers.size).to.equal(0);
 	});
 
+	it('keeps polling after an unknown substitution response without advancing lastUpdate', async () => {
+		const { adapter, states, timers } = makePollingAdapter();
+		adapter.config.refreshIntervalMinutes = 5;
+		const previousUpdate = Date.parse('2026-11-18T22:25:23.000Z');
+		states.set('info.lastUpdate', state(previousUpdate));
+		let runs = 0;
+		adapter.updateAccount = async () => {
+			runs++;
+			const result = await adapter.refreshResource('substitutions', () =>
+				Promise.resolve({
+					status: 200,
+					classification: 'unknown',
+					contentType: 'application/json',
+					body: new Uint8Array(),
+				}),
+			);
+			expect(result).to.deep.include({ success: false, degraded: true, status: 'unknown-response' });
+			return { connected: true, degraded: true, updated: false, lastError: 'substitutions:unknown-response' };
+		};
+
+		await adapter.onReady();
+
+		expect(runs).to.equal(1);
+		expect(states.get('substitutions.status')?.val).to.equal('unknown-response');
+		expect(states.get('info.status')?.val).to.equal('partial');
+		expect(states.get('info.lastUpdate')?.val).to.equal(previousUpdate);
+		expect([...timers.values()].map(timer => timer.delay)).to.deep.equal([300_000]);
+
+		const [[timer, scheduled]] = [...timers];
+		timers.delete(timer);
+		scheduled.callback();
+		const retry = adapter.activeRefresh;
+		if (!retry) {
+			throw new Error('Scheduled refresh did not start');
+		}
+		await retry;
+
+		expect(runs).to.equal(2);
+		expect(states.get('substitutions.status')?.val).to.equal('unknown-response');
+		expect(states.get('info.lastUpdate')?.val).to.equal(previousUpdate);
+		expect([...timers.values()].map(timer => timer.delay)).to.deep.equal([300_000]);
+		await adapter.onUnload(() => undefined);
+		expect(timers.size).to.equal(0);
+	});
+
 	it('does not rearm when unloaded during a refresh or when no account is configured', async () => {
 		const { adapter, timers } = makePollingAdapter();
 		const started = deferred();
@@ -384,6 +447,77 @@ describe('new root object tree', () => {
 		}
 		expect(objects.has('account')).to.equal(false);
 		expect(objects.has('account.info.schoolId')).to.equal(false);
+	});
+
+	it('removes legacy ms units from timestamp states while preserving their other metadata', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		const childId = 'a'.repeat(64);
+		const childBase = readableChildBase(childId, 'Student Alpha');
+		const seededStateIds = [
+			'info.lastUpdate',
+			'files.lastUpdate',
+			`${childBase}.info.lastUpdate`,
+			`${childBase}.timetable.lastUpdate`,
+		];
+		const originalObjects = new Map<string, { common: Record<string, unknown>; native: Record<string, unknown> }>();
+		for (const id of seededStateIds) {
+			const common = {
+				name: `Existing ${id}`,
+				type: 'number',
+				role: 'value.time',
+				read: true,
+				write: false,
+				def: 0,
+				unit: 'ms',
+				customMetadata: 'preserved',
+			};
+			const native = { customMetadata: 'preserved' };
+			originalObjects.set(id, { common, native });
+			objects.set(id, { _id: id, type: 'state', common, native });
+			states.set(id, state(1_700_000_000_000));
+		}
+
+		await adapter.createObjectTree();
+		await adapter.commitChildLessons([child(childId, 'Student Alpha')]);
+		await adapter.commitChildTimetables([
+			{
+				child: { id: childId, records: [] },
+				childPath: childBase.slice('students.'.length),
+				buckets: {
+					today: [],
+					tomorrow: [],
+					week: {
+						monday: [],
+						tuesday: [],
+						wednesday: [],
+						thursday: [],
+						friday: [],
+						saturday: [],
+						sunday: [],
+					},
+				},
+			},
+		]);
+
+		const lastUpdateObjects = [...objects.entries()].filter(
+			([id, object]) => id.endsWith('.lastUpdate') && object.type === 'state',
+		);
+		expect(lastUpdateObjects.map(([id]) => id)).to.include.members(seededStateIds);
+		for (const [id, object] of lastUpdateObjects) {
+			expect(object.common, id).not.to.have.property('unit');
+			expect(object.common, id).to.include({ type: 'number', role: 'value.time' });
+			expect(typeof states.get(id)?.val, id).to.equal('number');
+		}
+		for (const id of seededStateIds) {
+			const expected = originalObjects.get(id)!;
+			const expectedCommon = { ...expected.common };
+			delete expectedCommon.unit;
+			expect(objects.get(id)?.common, id).to.deep.equal(expectedCommon);
+			expect(objects.get(id)?.native, id).to.deep.equal(expected.native);
+		}
+		expect(states.get('info.lastUpdate')?.val).to.equal(1_700_000_000_000);
+		expect(states.get('files.lastUpdate')?.val).to.equal(1_700_000_000_000);
+		expect(states.get(`${childBase}.info.lastUpdate`)?.val).to.be.greaterThan(1_700_000_000_000);
 	});
 
 	it('publishes only the optional configured account display name and clears a stale value', async () => {
@@ -1070,12 +1204,12 @@ describe('non-compacted resource records', () => {
 		expect(states.has(`${channelId}.unbekannte_spalte`)).to.equal(true);
 		expect(states.has(`${channelId}.period`)).to.equal(false);
 
-		const complete = await adapter.refreshResource('substitutions', read, () => ({
-			status: 'complete',
-			kind: 'substitutions',
-			records: [record],
-			groups: [],
-		}));
+		const complete = await adapter.refreshResource(
+			'substitutions',
+			read,
+			() => ({ status: 'complete', kind: 'substitutions', records: [record], groups: [] }),
+			BEFORE_TEST_SUBSTITUTION_DATES,
+		);
 		expect(complete.success).to.equal(true);
 		expect(objects.get(channelId)?.common.name).to.equal('Custom substitution');
 		expect(objects.get(`${channelId}.period`)?.common.name).to.equal('Mein Zeitfenster');
@@ -1124,6 +1258,10 @@ describe('non-compacted resource records', () => {
 				portalDate: '12.11.2026',
 				columns: [{ header: 'Hinweis', value: 'Raum bleibt unverändert' }],
 			}),
+			jsonRecord('daily-other-date', {
+				portalDate: '14.11.2026',
+				columns: [{ header: 'Fach', value: 'Music' }],
+			}),
 		];
 		const response: PortalResponse = {
 			status: 200,
@@ -1136,19 +1274,27 @@ describe('non-compacted resource records', () => {
 			'substitutions',
 			() => Promise.resolve(response),
 			() => ({ status: 'complete', kind: 'substitutions', records, groups: [] }),
+			getPortalDateWindow(new Date('2026-11-11T23:30:00Z')),
 		);
 
 		expect(result.success).to.equal(true);
-		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(
+		expect(states.get('substitutions.today.json')?.val).to.equal(
 			'[{"period":"2","class":"10A","substitution":"Cover teacher","teacher":"Teacher","subject":"Mathematics","room":"B12","note":""},' +
 				'{"period":"","class":"","substitution":"","teacher":"","subject":"","room":"","note":"Raum bleibt unverändert"}]',
 		);
-		expect(states.get('substitutions.2026-11-13.json')?.val).to.equal(
+		expect(states.get('substitutions.tomorrow.json')?.val).to.equal(
 			'[{"period":"3","class":"9B","substitution":"Room change","teacher":"","subject":"Physics","room":"C4","note":""}]',
 		);
 		expect(states.get('substitutions.json')?.val).to.equal(JSON.stringify(records));
-		expect(states.get('substitutions.dailyJsonDates')?.val).to.equal('["2026-11-12","2026-11-13"]');
-		expect(objects.get('substitutions.2026-11-12')?.type).to.equal('channel');
+		expect(states.get('substitutions.2026-11-12.json')?.val).to.equal(states.get('substitutions.today.json')?.val);
+		expect(states.get('substitutions.2026-11-13.json')?.val).to.equal(
+			states.get('substitutions.tomorrow.json')?.val,
+		);
+		expect(states.get('substitutions.2026-11-14.json')?.val).to.contain('"subject":"Music"');
+		expect(states.get('substitutions.2026-11-14.portal-record.subject')?.val).to.equal('Music');
+		expect(objects.has('substitutions.2026-11-12')).to.equal(true);
+		expect(objects.has('substitutions.2026-11-13')).to.equal(true);
+		expect(objects.get('substitutions.today')?.type).to.equal('channel');
 		const firstSourceId = createHash('sha256').update(records[0].id).digest('hex');
 		const secondSourceId = createHash('sha256').update(records[1].id).digest('hex');
 		const unknownSourceId = createHash('sha256').update(records[2].id).digest('hex');
@@ -1167,7 +1313,7 @@ describe('non-compacted resource records', () => {
 		expect(states.get(`substitutions.${secondRecordPath}.portaldate`)?.val).to.equal('13.11.2026');
 		expect(states.get(`substitutions.${unknownRecordPath}.subject`)?.val).to.equal('Unassigned');
 		expect(states.get(`substitutions.${invalidRecordPath}.subject`)?.val).to.equal('Invalid date');
-		for (const date of ['2026-11-12', '2026-11-13']) {
+		for (const date of ['today', 'tomorrow', '2026-11-12', '2026-11-13', '2026-11-14']) {
 			expect(objects.get(`substitutions.${date}.json`)?.common).to.include({
 				type: 'string',
 				role: 'json',
@@ -1197,6 +1343,7 @@ describe('non-compacted resource records', () => {
 				'substitutions',
 				() => Promise.resolve(response),
 				() => ({ status: 'complete', kind: 'substitutions', records, groups: [] }),
+				BEFORE_TEST_SUBSTITUTION_DATES,
 			);
 
 		await complete(firstRecords);
@@ -1257,6 +1404,94 @@ describe('non-compacted resource records', () => {
 		expect(objects.has(firstRecordChannel)).to.equal(true);
 		expect(objects.has(secondRecordChannel)).to.equal(false);
 		expect(states.get('substitutions.dailyJsonDates')?.val).to.equal('["2026-11-12"]');
+	});
+
+	it('preserves dated substitution IDs and updates live aliases across a rollover', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const records = [
+			jsonRecord('row-12', { portalDate: '12.11.2026', columns: [{ header: 'Fach', value: 'Math' }] }),
+			jsonRecord('row-13', { portalDate: '13.11.2026', columns: [{ header: 'Fach', value: 'Music' }] }),
+		];
+		const read = (): Promise<PortalResponse> =>
+			Promise.resolve({
+				status: 200,
+				classification: 'success',
+				contentType: 'application/json',
+				body: Buffer.from('[]'),
+			});
+		const complete = (
+			dateWindow: PortalDateWindow,
+			rows: readonly PortalRecord[] = records,
+		): ReturnType<TestAdapter['refreshResource']> =>
+			adapter.refreshResource(
+				'substitutions',
+				read,
+				() => ({ status: 'complete', kind: 'substitutions', records: rows, groups: [] }),
+				dateWindow,
+			);
+		const forNov12 = getPortalDateWindow(new Date('2026-11-11T23:30:00Z'));
+		const forNov13 = getPortalDateWindow(new Date('2026-11-12T23:30:00Z'));
+		const prefix = 'substitutions';
+		const todayRecord = `${prefix}.2026-11-12.portal-record`;
+		const tomorrowRecord = `${prefix}.2026-11-13.portal-record`;
+		const oldDate = `${prefix}.2026-11-12`;
+		const subject = (id: string): unknown => states.get(`${id}.subject`)?.val;
+		const dateJson = (day: string): unknown => states.get(`${prefix}.${day}.json`)?.val;
+
+		await adapter.refreshResource(
+			'substitutions',
+			read,
+			() => ({ status: 'invalid', kind: 'substitutions', reason: 'unexpected-html-structure' }),
+			forNov12,
+		);
+		expect(objects.has(`${prefix}.today`)).to.equal(false);
+		expect(objects.has(`${prefix}.tomorrow`)).to.equal(false);
+		await complete(BEFORE_TEST_SUBSTITUTION_DATES);
+		const legacyJson = dateJson('2026-11-12');
+		const previousManifest = states.get(`${prefix}.recordPaths`)?.val;
+		await adapter.extendObjectAsync(`${oldDate}.portal-record`, { common: { name: 'My slot label' } });
+		await adapter.refreshResource(
+			'substitutions',
+			read,
+			() => ({ status: 'invalid', kind: 'substitutions', reason: 'unexpected-html-structure' }),
+			forNov12,
+		);
+		expect(dateJson('2026-11-12')).to.equal(legacyJson);
+		expect(dateJson('today')).to.equal('[]');
+		expect(states.get(`${prefix}.recordPaths`)?.val).to.equal(previousManifest);
+
+		const currentWindow = await complete(forNov12);
+		expect(currentWindow.status).to.equal('complete');
+		expect(states.get(`${prefix}.dailyJsonDates`)?.val).to.equal('["2026-11-12","2026-11-13"]');
+		expect(objects.has(`${prefix}.2026-11-13`)).to.equal(true);
+		expect(dateJson('today')).to.equal(legacyJson);
+		expect(dateJson('tomorrow')).to.contain('Music');
+		expect(subject(todayRecord)).to.equal('Math');
+		expect(subject(tomorrowRecord)).to.equal('Music');
+		expect(objects.get(todayRecord)?.common.name).to.equal('My slot label');
+
+		const notesId = `${prefix}.today.notes`;
+		objects.set(notesId, { _id: notesId, type: 'channel', common: { name: 'User notes' }, native: {} });
+		const paths = JSON.parse(String(states.get(`${prefix}.recordPaths`)?.val)) as Record<string, string[]>;
+		paths['legacy-fixed-paths'] = ['today', 'today.json', 'today.notes', 'tomorrow', 'tomorrow.json'];
+		states.set(`${prefix}.recordPaths`, state(JSON.stringify(paths)));
+		const rollover = await complete(forNov13);
+		expect(rollover.status).to.equal('complete');
+		expect(dateJson('today')).to.contain('Music');
+		expect(dateJson('tomorrow')).to.equal('[]');
+		expect(subject(todayRecord)).to.equal('Math');
+		expect(subject(tomorrowRecord)).to.equal('Music');
+		expect(objects.get(todayRecord)?.common.name).to.equal('My slot label');
+		expect(objects.has(notesId)).to.equal(true);
+
+		await complete(forNov13, []);
+		expect(objects.has(`${prefix}.today`)).to.equal(true);
+		expect(objects.has(`${prefix}.tomorrow`)).to.equal(true);
+		expect(objects.has(todayRecord)).to.equal(false);
+		expect(objects.has(tomorrowRecord)).to.equal(false);
+		expect(dateJson('today')).to.equal('[]');
+		expect(dateJson('tomorrow')).to.equal('[]');
 	});
 
 	it('keeps legacy root-level substitution records on failed refreshes and migrates them after a complete refresh', async () => {
@@ -1326,6 +1561,7 @@ describe('non-compacted resource records', () => {
 					body: Buffer.from('[]'),
 				}),
 			() => ({ status: 'complete', kind: 'substitutions', records: [record], groups: [] }),
+			BEFORE_TEST_SUBSTITUTION_DATES,
 		);
 		adapter.setStateAsync = originalSetState;
 		expect(failedCommit.success).to.equal(false);
@@ -1343,6 +1579,7 @@ describe('non-compacted resource records', () => {
 			'substitutions',
 			() => Promise.resolve(response),
 			() => ({ status: 'complete', kind: 'substitutions', records: [record], groups: [] }),
+			BEFORE_TEST_SUBSTITUTION_DATES,
 		);
 		const migratedChannel = 'substitutions.2026-11-12.portal-record';
 
@@ -2106,6 +2343,75 @@ describe('parent child timetable object synchronization', () => {
 		expect(objects.has(`${timetableBase}.week`)).to.equal(true);
 	});
 
+	it('uses a verified visible period cell for lesson IDs instead of numeric class values', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		const childId = 'f'.repeat(64);
+		await adapter.commitChildLessons([childWithRecords(childId, 'Student Delta', [])]);
+		const timetableBase = `${readableChildBase(childId, 'Student Delta')}.timetable`;
+		const makeRecord = (id: string, fields: readonly { header: string; text: string }[]): PortalRecord => ({
+			format: 'html',
+			id: `timetable:${id.repeat(64)}`,
+			section: 'own',
+			attributes: {},
+			fields: fields.map(field => ({ ...field, links: [], attributes: {} })),
+			context: { childId, timetableWeekday: 'friday' },
+		});
+		const records = [
+			makeRecord('a', [
+				{ header: 'Stunde', text: '5.' },
+				{ header: 'Lesson', text: 'Chemistry' },
+			]),
+			makeRecord('b', [
+				{ header: 'Period', text: '5.' },
+				{ header: 'Lesson', text: 'Biology' },
+			]),
+			makeRecord('c', [
+				{ header: 'Class', text: '5' },
+				{ header: 'Lesson', text: 'Physics' },
+			]),
+			makeRecord('d', [
+				{ header: 'Class', text: '5' },
+				{ header: 'Period', text: '6' },
+				{ header: 'Lesson', text: 'History' },
+			]),
+		];
+		const response: PortalResponse = {
+			status: 200,
+			classification: 'success',
+			contentType: 'application/json',
+			body: Buffer.from('{}'),
+		};
+
+		const result = await adapter.refreshResource(
+			'timetable',
+			() => Promise.resolve(response),
+			() => ({
+				status: 'complete',
+				kind: 'timetable',
+				records: [],
+				groups: [],
+				childTimetables: [{ id: childId, records }],
+			}),
+		);
+
+		const lessonsBase = `${timetableBase}.week.friday.lessons`;
+		const firstLesson = `${lessonsBase}.05`;
+		const duplicateLesson = `${lessonsBase}.05_2`;
+		const classNumberLesson = `${lessonsBase}.lesson_03`;
+		const periodAfterClassLesson = `${lessonsBase}.06`;
+		expect(result.success).to.equal(true);
+		expect(states.get(`${lessonsBase}.recordIds`)?.val).to.equal('["05","05_2","06","lesson_03"]');
+		expect(objects.get(firstLesson)?.common.name).to.equal('5. — Chemistry');
+		expect(states.get(`${firstLesson}.period`)?.val).to.equal('5');
+		expect(objects.get(duplicateLesson)?.common.name).to.equal('5. — Biology');
+		expect(states.get(`${duplicateLesson}.period`)?.val).to.equal('5');
+		expect(objects.get(classNumberLesson)?.common.name).to.equal('5 — Physics');
+		expect(states.get(`${classNumberLesson}.class`)?.val).to.equal('5');
+		expect(objects.has(`${classNumberLesson}.period`)).to.equal(false);
+		expect(objects.get(periodAfterClassLesson)?.common.name).to.equal('5 — 6');
+		expect(states.get(`${periodAfterClassLesson}.period`)?.val).to.equal('6');
+	});
+
 	it('strips only the generic prefix from generated personal timetable lesson names', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		adapter.getBerlinToday = () => '2026-11-11';
@@ -2188,10 +2494,10 @@ describe('parent child timetable object synchronization', () => {
 			context: { childId, timetableWeekday: 'friday' },
 		});
 		const records = [
-			makeRecord('i', '5 11:25 - 12:10 5.', 'Chemistry', '11:25', '12:10'),
-			makeRecord('j', '5 12:15 - 13:00 5.', 'Biology', '12:15', '13:00'),
-			makeRecord('k', 'unknown period', 'Study hall', '13:05', '13:50'),
-			makeRecord('l', '5 14:00 - 14:45 6.', 'Ambiguous period', '14:00', '14:45'),
+			makeRecord('i', '6 12:15 - 13:00 6', 'Chemistry', '12:15', '13:00'),
+			makeRecord('j', '6 13:05 - 13:50 6.', 'Biology', '13:05', '13:50'),
+			makeRecord('k', 'unknown period', 'Study hall', '13:55', '14:40'),
+			makeRecord('l', '6 14:00 - 14:45 7', 'Ambiguous period', '14:00', '14:45'),
 		];
 		const response: PortalResponse = {
 			status: 200,
@@ -2213,20 +2519,20 @@ describe('parent child timetable object synchronization', () => {
 		);
 
 		const lessonsBase = `${timetableBase}.week.friday.lessons`;
-		const firstLesson = `${lessonsBase}.05`;
-		const duplicateLesson = `${lessonsBase}.05_2`;
+		const firstLesson = `${lessonsBase}.06`;
+		const duplicateLesson = `${lessonsBase}.06_2`;
 		const unknownLesson = `${lessonsBase}.lesson_03`;
 		const ambiguousLesson = `${lessonsBase}.lesson_04`;
 		expect(result.success).to.equal(true);
-		expect(states.get(`${lessonsBase}.recordIds`)?.val).to.equal('["05","05_2","lesson_03","lesson_04"]');
-		expect(states.get(`${firstLesson}.period`)?.val).to.equal('5');
-		expect(states.get(`${firstLesson}.start_time`)?.val).to.equal('11:25');
-		expect(states.get(`${firstLesson}.end_time`)?.val).to.equal('12:10');
-		expect(states.get(`${duplicateLesson}.period`)?.val).to.equal('5');
+		expect(states.get(`${lessonsBase}.recordIds`)?.val).to.equal('["06","06_2","lesson_03","lesson_04"]');
+		expect(states.get(`${firstLesson}.period`)?.val).to.equal('6');
+		expect(states.get(`${firstLesson}.start_time`)?.val).to.equal('12:15');
+		expect(states.get(`${firstLesson}.end_time`)?.val).to.equal('13:00');
+		expect(states.get(`${duplicateLesson}.period`)?.val).to.equal('6');
 		expect(states.get(`${duplicateLesson}.lesson`)?.val).to.equal('Biology');
 		expect(objects.has(`${unknownLesson}.period`)).to.equal(false);
 		expect(states.get(`${unknownLesson}.lesson`)?.val).to.equal('Study hall');
-		expect(states.get(`${unknownLesson}.start_time`)?.val).to.equal('13:05');
+		expect(states.get(`${unknownLesson}.start_time`)?.val).to.equal('13:55');
 		expect(objects.has(`${ambiguousLesson}.period`)).to.equal(false);
 		expect(states.get(`${ambiguousLesson}.lesson`)?.val).to.equal('Ambiguous period');
 		expect(JSON.parse(String(states.get(`${timetableBase}.json`)?.val))).to.deep.equal(records);

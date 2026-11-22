@@ -7,6 +7,7 @@ describe('getPortalDateWindow', () => {
 
 		expect(result).to.deep.equal({
 			today: '2026-03-30',
+			tomorrow: '2026-03-31',
 			substitutionDate: '30.03.2026',
 			calendarStart: '2025-11-30',
 			calendarEnd: '2027-03-21',

@@ -844,7 +844,7 @@ async function readSubstitutions(reader) {
   var _a, _b, _c;
   const dateList = await reader.get("/vertretungsplan.php");
   if (dateList.classification !== "success") {
-    return dateList;
+    return dateList.classification === "unknown" ? { ...dateList, diagnosticCode: "substitution-date-list-response-unknown" } : dateList;
   }
   const listingBody = Buffer.from(dateList.body).toString("utf8");
   const parsedListing = (0, import_portal_parser.parsePortalResource)("substitutions", listingBody, (_a = dateList.contentType) != null ? _a : void 0);
@@ -861,14 +861,17 @@ async function readSubstitutions(reader) {
     }
     return [{ date: record.fields.date, portalTag: record.fields.portalTag }];
   });
-  if (dates.length !== parsedDates.records.length || dates.length > import_portal_parser.MAX_SUBSTITUTION_DATES) {
-    return incompleteAggregation();
+  if (dates.length !== parsedDates.records.length) {
+    return incompleteAggregation("substitution-date-list-invalid");
+  }
+  if (dates.length > import_portal_parser.MAX_SUBSTITUTION_DATES) {
+    return incompleteAggregation("substitution-date-count-exceeded");
   }
   const substitutions = [];
   for (const { date, portalTag } of dates) {
     const response = await reader.postRead({ type: "substitution-day", date, portalTag });
     if (response.classification !== "success") {
-      return response;
+      return response.classification === "unknown" ? { ...response, diagnosticCode: "substitution-day-response-unknown" } : response;
     }
     const parsedDay = (0, import_portal_parser.parsePortalResource)(
       "substitutions",
@@ -876,18 +879,18 @@ async function readSubstitutions(reader) {
       (_c = response.contentType) != null ? _c : void 0
     );
     if (parsedDay.status !== "complete") {
-      return incompleteAggregation();
+      return incompleteAggregation(`substitution-day-response-${parsedDay.status}-${parsedDay.reason}`);
     }
     for (const record of parsedDay.records) {
       if (record.format !== "json") {
-        return incompleteAggregation();
+        return incompleteAggregation("substitution-day-record-format-invalid");
       }
       substitutions.push({ ...record.fields, portalDate: date });
     }
   }
   const body = Buffer.from(JSON.stringify(substitutions), "utf8");
   if (body.byteLength > 4 * 1024 * 1024) {
-    return incompleteAggregation();
+    return incompleteAggregation("substitution-aggregation-limit-exceeded");
   }
   return { status: 200, classification: "success", contentType: "application/json", body };
 }
