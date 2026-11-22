@@ -161,11 +161,6 @@ A live refresh confirmed retrieval of the linked personal `#own` timetable secti
 
 ### **WORK IN PROGRESS**
 
-- (Voodoo2man) Fixed manual refresh handling, resolved fixed-path collisions during record creation and migration, and repaired malformed record channels.
-- (Voodoo2man) Switched generated field IDs and daily substitution JSON keys to English while retaining original portal content.
-- (Voodoo2man) Scheduled automatic refreshes after each cycle finished and exposed the configured account display name.
-- (Voodoo2man) Added stable daily substitution aliases while preserving dated channels, and handled confirmed empty days and unsupported structures safely.
-- (Voodoo2man) Removed displayed timestamp units and corrected lesson IDs for verified periods with or without a trailing dot.
 - (Voodoo2man) Initial Version
 
 ## License
