@@ -568,6 +568,77 @@ function normalizeRecordKey(value: string): string {
 		.replace(/[^a-z0-9]/gu, '');
 }
 
+/**
+ * Resolve source section markers without changing the aggregate's original section.
+ *
+ * @param section Source section marker.
+ */
+export function canonicalPortalSection(section: string): string {
+	switch (section) {
+		case 'LGs':
+			return 'learningGroups';
+		case 'klausuren':
+			return 'exams';
+		case 'mappen':
+			return 'assignments';
+		case 'attendanceTable':
+		case 'anwesend':
+			return 'attendance';
+		case 'aktuell':
+			return 'current';
+		default:
+			return section;
+	}
+}
+
+const PORTAL_COLUMN_ALIASES = new Map([
+	['stunde', 'period'],
+	['klasse', 'class'],
+	['vertretung', 'substitution'],
+	['lehrkraft', 'teacher'],
+	['fach', 'subject'],
+	['raum', 'room'],
+	['hinweis', 'note'],
+	['datum', 'date'],
+	['wochentag', 'weekday'],
+	['tag', 'day'],
+	['kurs', 'course'],
+	['weiteres', 'additional information'],
+	['anwesend', 'present'],
+	['entschuldigt', 'excused'],
+	['andere schulische veranstaltung', 'other school event'],
+	['thema datum inhalt wenn hinterlegt hausaufgaben wenn hinterlegt', 'lesson details'],
+]);
+
+/**
+ * Map a source column heading to its verified English key without changing the source record.
+ *
+ * @param header Source column heading.
+ */
+export function canonicalPortalColumn(header: string): string {
+	const normalized = header
+		.normalize('NFKD')
+		.replace(/\p{M}/gu, '')
+		.toLowerCase()
+		.replace(/ß/gu, 'ss')
+		.replace(/[^a-z0-9]+/gu, ' ')
+		.trim();
+	return PORTAL_COLUMN_ALIASES.get(normalized) ?? normalized;
+}
+
+/**
+ * Identify a profile field independently of its value, including repeated labels.
+ *
+ * @param label Source profile field label.
+ * @param occurrences Count of each normalized label in the current profile.
+ */
+export function getProfileFieldId(label: string, occurrences: Map<string, number>): string {
+	const normalizedLabel = label.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+	const occurrence = (occurrences.get(normalizedLabel) ?? 0) + 1;
+	occurrences.set(normalizedLabel, occurrence);
+	return hashId({ recordType: 'profile', label: normalizedLabel, occurrence });
+}
+
 function hashSourceId(sourceId: string): string {
 	return `source:${createHash('sha256').update(sourceId).digest('hex')}`;
 }
@@ -1441,6 +1512,7 @@ function getChildLessonSection(paneId: string, parentNumericId: string): ChildLe
 function parseAccountHtml(root: HTMLElement): PortalParseResult {
 	const tableBodies = root.querySelectorAll('div.col-md-12 table.table.table-striped tbody');
 	const records: PortalJsonRecord[] = [];
+	const profileFieldOccurrences = new Map<string, number>();
 	for (const body of tableBodies) {
 		for (const row of body.querySelectorAll('tr')) {
 			const cells = row.querySelectorAll(':scope > td, :scope > th');
@@ -1459,7 +1531,7 @@ function parseAccountHtml(root: HTMLElement): PortalParseResult {
 				continue;
 			}
 			const fields = sanitizeJsonFields({ recordType: 'profile', label, value: cells[1].text });
-			records.push({ format: 'json', id: getJsonId(fields), fields });
+			records.push({ format: 'json', id: getProfileFieldId(label, profileFieldOccurrences), fields });
 		}
 	}
 

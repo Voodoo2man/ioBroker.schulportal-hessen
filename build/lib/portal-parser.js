@@ -19,6 +19,9 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var portal_parser_exports = {};
 __export(portal_parser_exports, {
   MAX_SUBSTITUTION_DATES: () => MAX_SUBSTITUTION_DATES,
+  canonicalPortalColumn: () => canonicalPortalColumn,
+  canonicalPortalSection: () => canonicalPortalSection,
+  getProfileFieldId: () => getProfileFieldId,
   parsePortalResource: () => parsePortalResource,
   parsePortalTimetableChildDetail: () => parsePortalTimetableChildDetail
 });
@@ -287,6 +290,53 @@ function getJsonId(fields) {
 }
 function normalizeRecordKey(value) {
   return value.normalize("NFKD").replace(new RegExp("\\p{M}", "gu"), "").replace(/ß/gu, "ss").toLowerCase().replace(/[^a-z0-9]/gu, "");
+}
+function canonicalPortalSection(section) {
+  switch (section) {
+    case "LGs":
+      return "learningGroups";
+    case "klausuren":
+      return "exams";
+    case "mappen":
+      return "assignments";
+    case "attendanceTable":
+    case "anwesend":
+      return "attendance";
+    case "aktuell":
+      return "current";
+    default:
+      return section;
+  }
+}
+const PORTAL_COLUMN_ALIASES = /* @__PURE__ */ new Map([
+  ["stunde", "period"],
+  ["klasse", "class"],
+  ["vertretung", "substitution"],
+  ["lehrkraft", "teacher"],
+  ["fach", "subject"],
+  ["raum", "room"],
+  ["hinweis", "note"],
+  ["datum", "date"],
+  ["wochentag", "weekday"],
+  ["tag", "day"],
+  ["kurs", "course"],
+  ["weiteres", "additional information"],
+  ["anwesend", "present"],
+  ["entschuldigt", "excused"],
+  ["andere schulische veranstaltung", "other school event"],
+  ["thema datum inhalt wenn hinterlegt hausaufgaben wenn hinterlegt", "lesson details"]
+]);
+function canonicalPortalColumn(header) {
+  var _a;
+  const normalized = header.normalize("NFKD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase().replace(/ß/gu, "ss").replace(/[^a-z0-9]+/gu, " ").trim();
+  return (_a = PORTAL_COLUMN_ALIASES.get(normalized)) != null ? _a : normalized;
+}
+function getProfileFieldId(label, occurrences) {
+  var _a;
+  const normalizedLabel = label.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+  const occurrence = ((_a = occurrences.get(normalizedLabel)) != null ? _a : 0) + 1;
+  occurrences.set(normalizedLabel, occurrence);
+  return hashId({ recordType: "profile", label: normalizedLabel, occurrence });
 }
 function hashSourceId(sourceId) {
   return `source:${(0, import_node_crypto.createHash)("sha256").update(sourceId).digest("hex")}`;
@@ -1046,6 +1096,7 @@ function getChildLessonSection(paneId, parentNumericId) {
 function parseAccountHtml(root) {
   const tableBodies = root.querySelectorAll("div.col-md-12 table.table.table-striped tbody");
   const records = [];
+  const profileFieldOccurrences = /* @__PURE__ */ new Map();
   for (const body of tableBodies) {
     for (const row of body.querySelectorAll("tr")) {
       const cells = row.querySelectorAll(":scope > td, :scope > th");
@@ -1062,7 +1113,7 @@ function parseAccountHtml(root) {
         continue;
       }
       const fields = sanitizeJsonFields({ recordType: "profile", label, value: cells[1].text });
-      records.push({ format: "json", id: getJsonId(fields), fields });
+      records.push({ format: "json", id: getProfileFieldId(label, profileFieldOccurrences), fields });
     }
   }
   const accountTypes = /* @__PURE__ */ new Set();
@@ -1675,6 +1726,9 @@ function hasFeatureUnavailable(text) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   MAX_SUBSTITUTION_DATES,
+  canonicalPortalColumn,
+  canonicalPortalSection,
+  getProfileFieldId,
   parsePortalResource,
   parsePortalTimetableChildDetail
 });

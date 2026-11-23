@@ -13,6 +13,7 @@ import type {
 import type { PortalResponse } from './portal-session';
 import { allocateIdPathSegments } from './id-path-segments';
 import { getPortalDateWindow, type PortalDateWindow } from './portal-dates';
+import type { SchoolOption } from './portal-school-directory';
 
 const BEFORE_TEST_SUBSTITUTION_DATES = getPortalDateWindow(new Date('2026-11-10T12:00:00Z'));
 
@@ -45,6 +46,7 @@ interface TestAdapter {
 	};
 	namespace: string;
 	onReady(): Promise<void>;
+	onMessage(message: ioBroker.Message): void;
 	onUnload(callback: () => void): Promise<void>;
 	refreshAccount(): Promise<void>;
 	updateAccount(): Promise<{ connected: boolean; degraded: boolean; updated: boolean; lastError: string }>;
@@ -52,6 +54,11 @@ interface TestAdapter {
 	setTimeout(callback: () => void, delay: number): ioBroker.Timeout;
 	clearTimeout(timer: ioBroker.Timeout): void;
 	subscribeStates(id: string): void;
+	getSchoolOptions(): Promise<SchoolOption[]>;
+	sendTo(from: string, command: string, message: unknown, callback?: unknown): void;
+	getObjectListAsync(params: { startkey?: string; endkey?: string }): Promise<{
+		rows: Array<{ id: string; value: ioBroker.Object }>;
+	}>;
 	terminate(reason: string, code: number): void;
 	log: { debug(message: string): void; warn(message: string): void; error(message: string): void };
 	onStateChange(id: string, state: ioBroker.State | null | undefined): void;
@@ -92,6 +99,7 @@ function makeTestAdapter(): {
 	adapter: TestAdapter;
 	objects: Map<string, StoredObject>;
 	states: Map<string, ioBroker.State>;
+	subscriptions: string[];
 } {
 	const adapter = new SchulportalHessenAdapter() as unknown as TestAdapter;
 	adapter.config = { schoolId: '5202', credentialId: 'system.credentials.test-credential' };
@@ -99,6 +107,8 @@ function makeTestAdapter(): {
 	adapter.log = { debug: () => undefined, warn: () => undefined, error: () => undefined };
 	const objects = new Map<string, StoredObject>();
 	const states = new Map<string, ioBroker.State>();
+	const subscriptions: string[] = [];
+	adapter.subscribeStates = id => subscriptions.push(id);
 
 	adapter.getObjectAsync = id => {
 		const object = objects.get(id);
@@ -126,6 +136,17 @@ function makeTestAdapter(): {
 		return Promise.resolve();
 	};
 	adapter.getStateAsync = id => Promise.resolve(states.get(id) ?? null);
+	adapter.getObjectListAsync = params => {
+		const startkey = params?.startkey ?? '';
+		const endkey = params?.endkey ?? '\uffff';
+		const rows = [...objects].flatMap(([id, object]) => {
+			const fullId = `${adapter.namespace}.${id}`;
+			return fullId >= startkey && fullId <= endkey
+				? [{ id: fullId, value: { ...object, _id: fullId } as unknown as ioBroker.Object }]
+				: [];
+		});
+		return Promise.resolve({ rows });
+	};
 	adapter.setObjectAsync = (id, object) => {
 		objects.set(id, { _id: id, ...(object as unknown as Omit<StoredObject, '_id'>) });
 		return Promise.resolve();
@@ -144,7 +165,7 @@ function makeTestAdapter(): {
 		return Promise.resolve();
 	};
 
-	return { adapter, objects, states };
+	return { adapter, objects, states, subscriptions };
 }
 
 function child(id: string, name: string): PortalChildLessons {
@@ -250,7 +271,7 @@ function readableRecordPath(states: Map<string, ioBroker.State>, base: string, s
 }
 
 describe('manual refresh state', () => {
-	it('accepts a fully qualified refresh ID and refreshes only for an unacknowledged true value', () => {
+	it('accepts a fully qualified refresh ID and refreshes only for an unacknowledged true value', async () => {
 		const { adapter, states } = makeTestAdapter();
 		adapter.namespace = 'schulportal-hessen.0';
 		let refreshRequests = 0;
@@ -259,14 +280,74 @@ describe('manual refresh state', () => {
 			return Promise.resolve();
 		};
 		const id = `${adapter.namespace}.info.refresh`;
+		await adapter.onReady();
+		expect(refreshRequests).to.equal(1);
 
 		adapter.onStateChange(id, { val: false, ack: false } as ioBroker.State);
 		adapter.onStateChange(id, { val: true, ack: true } as ioBroker.State);
 		adapter.onStateChange(id, { val: true, ack: false } as ioBroker.State);
 
-		expect(refreshRequests).to.equal(1);
+		expect(refreshRequests).to.equal(2);
 		expect(states.get('info.refresh')).to.deep.include({ val: false, ack: true });
 		expect(states.has(`${id}`)).to.equal(false);
+	});
+
+	it('subscribes and acknowledges refresh commands with recoverable invalid configuration', async () => {
+		const { adapter, states, subscriptions } = makeTestAdapter();
+		adapter.config.schoolId = 'invalid';
+		let refreshRequests = 0;
+		adapter.requestRefresh = () => {
+			refreshRequests++;
+			return Promise.resolve();
+		};
+
+		await adapter.onReady();
+		adapter.onStateChange(`${adapter.namespace}.info.refresh`, { val: true, ack: false } as ioBroker.State);
+		await new Promise(resolve => setTimeout(resolve, 0));
+
+		expect(subscriptions).to.include('info.refresh');
+		expect(states.get('info.status')?.val).to.equal('invalid-config');
+		expect(states.get('info.refresh')).to.deep.include({ val: false, ack: true });
+		expect(refreshRequests).to.equal(0);
+	});
+});
+
+describe('school search messaging', () => {
+	it('catches processing failures and responds only once with an empty result', async () => {
+		const { adapter } = makeTestAdapter();
+		adapter.getSchoolOptions = () => Promise.resolve([{ value: '123' } as SchoolOption]);
+		const responses: unknown[] = [];
+		adapter.sendTo = (_from, _command, message) => responses.push(message);
+
+		adapter.onMessage({
+			command: 'searchSchools',
+			from: 'admin.0',
+			callback: 1,
+			message: { query: 'school' },
+		} as unknown as ioBroker.Message);
+		await new Promise(resolve => setTimeout(resolve, 0));
+
+		expect(responses).to.deep.equal([[]]);
+	});
+
+	it('contains synchronous send failures without attempting a second response', async () => {
+		const { adapter } = makeTestAdapter();
+		adapter.getSchoolOptions = () => Promise.resolve([]);
+		let responseAttempts = 0;
+		adapter.sendTo = () => {
+			responseAttempts++;
+			throw new Error('Synchronous send failure');
+		};
+
+		adapter.onMessage({
+			command: 'searchSchools',
+			from: 'admin.0',
+			callback: 1,
+			message: { query: 'school' },
+		} as unknown as ioBroker.Message);
+		await new Promise(resolve => setTimeout(resolve, 0));
+
+		expect(responseAttempts).to.equal(1);
 	});
 });
 
@@ -532,6 +613,41 @@ describe('new root object tree', () => {
 		expect(states.get('info.accountName')).to.deep.include({ val: '', ack: true });
 	});
 
+	it('reuses the existing profile channel when upgrading and changing a profile value', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const path = 'profile.field-schule';
+		const oldRecord = jsonRecord('legacy-school', { recordType: 'profile', label: 'Schule', value: 'Old School' });
+		const oldId = createHash('sha256').update(oldRecord.id).digest('hex');
+		objects.set(path, {
+			_id: path,
+			type: 'channel',
+			common: { name: 'Schule' },
+			native: { portalRecordDisplayName: 'Schule' },
+		});
+		states.set('profile.recordIds', state(JSON.stringify([oldId])));
+		states.set('profile.recordPaths', state(JSON.stringify({ [oldId]: ['field-schule'] })));
+		states.set('profile.json', state(JSON.stringify([oldRecord])));
+
+		for (const school of ['New School', 'Changed Again']) {
+			const result = await adapter.refreshResource('account', () =>
+				Promise.resolve({
+					status: 200,
+					classification: 'success',
+					contentType: 'text/html',
+					body: Buffer.from(
+						`<div class="col-md-12"><table class="table table-striped"><tbody><tr><td>Schule</td><td>${school}</td></tr></tbody></table></div>`,
+					),
+				}),
+			);
+			expect(result.status).to.equal('complete');
+			expect(states.get(`${path}.value`)?.val).to.equal(school);
+			expect(objects.get(path)?.common.name).to.equal('School');
+			expect(objects.has('profile.field-school')).to.equal(false);
+		}
+		expect(states.get('profile.recordIds')?.val).not.to.equal(JSON.stringify([oldId]));
+	});
+
 	it('maps verified profile labels and account type to the root summary states', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		await adapter.createObjectTree();
@@ -562,6 +678,7 @@ describe('new root object tree', () => {
 		expect(states.get('profile.school')?.val).to.equal('Example School');
 		expect(states.get('profile.count')?.val).to.equal(2);
 		expect(objects.get('profile.field-name')?.type).to.equal('channel');
+		expect(objects.get('profile.field-school')?.common.name).to.equal('School');
 		expect(objects.has('profile.name') && objects.get('profile.name')?.type === 'channel').to.equal(false);
 
 		await adapter.refreshResource(
@@ -1042,8 +1159,83 @@ describe('compact resource records', () => {
 	});
 });
 
+describe('automatic cleanup', () => {
+	const custom = { 'history.0': { enabled: true } };
+
+	it('keeps customized timetable defaults and retries cleanup after protection is removed', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const base = 'students.timetable';
+		for (const [field, value] of Object.entries({ count: 0, lastUpdate: 0, json: '[]', recordIds: '[]' })) {
+			const id = `${base}.${field}`;
+			objects.set(id, {
+				_id: id,
+				type: 'state',
+				common: { name: field, ...(field === 'count' ? { custom } : {}) },
+				native: {},
+			});
+			states.set(id, state(value));
+		}
+
+		const refresh = (): ReturnType<TestAdapter['refreshResource']> =>
+			adapter.refreshResource('timetable', () =>
+				Promise.resolve({
+					status: 200,
+					classification: 'success',
+					contentType: 'text/html',
+					body: Buffer.from('<html></html>'),
+				}),
+			);
+
+		await refresh();
+		expect(objects.get(`${base}.count`)?.common.custom).to.deep.equal(custom);
+		expect(states.get(`${base}.count`)?.val).to.equal(0);
+		expect(objects.has(`${base}.json`)).to.equal(false);
+
+		delete objects.get(`${base}.count`)?.common.custom;
+		await refresh();
+		expect(objects.has(`${base}.count`)).to.equal(false);
+		expect(states.has(`${base}.count`)).to.equal(false);
+	});
+
+	it('keeps a stale substitution day with a customized descendant and retries when protection is removed', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const oldDate = '2026-11-09';
+		const channel = `substitutions.${oldDate}`;
+		const field = `${channel}.portal-record.subject`;
+		objects.set(channel, { _id: channel, type: 'channel', common: { name: oldDate }, native: {} });
+		objects.set(field, { _id: field, type: 'state', common: { name: 'Subject', custom }, native: {} });
+		states.set(field, state('Mathematics'));
+		states.set('substitutions.dailyJsonDates', state(JSON.stringify([oldDate])));
+		const refresh = (): ReturnType<TestAdapter['refreshResource']> =>
+			adapter.refreshResource(
+				'substitutions',
+				() =>
+					Promise.resolve({
+						status: 200,
+						classification: 'success',
+						contentType: 'application/json',
+						body: Buffer.from('[]'),
+					}),
+				() => ({ status: 'complete', kind: 'substitutions', records: [], groups: [] }),
+				BEFORE_TEST_SUBSTITUTION_DATES,
+			);
+
+		expect((await refresh()).status).to.equal('complete-cleanup-pending');
+		expect(objects.get(field)?.common.custom).to.deep.equal(custom);
+		expect(states.get(field)?.val).to.equal('Mathematics');
+		expect(objects.has(channel)).to.equal(true);
+
+		delete objects.get(field)?.common.custom;
+		expect((await refresh()).status).to.equal('complete');
+		expect(objects.has(channel)).to.equal(false);
+		expect(objects.has(field)).to.equal(false);
+	});
+});
+
 describe('non-compacted resource records', () => {
-	it('uses an English section label without changing the protocol-based channel path or aggregate', async () => {
+	it('uses an English section segment for new channel paths and preserves the source aggregate', async () => {
 		const { adapter, objects, states } = makeTestAdapter();
 		await adapter.createObjectTree();
 		const record: PortalRecord = {
@@ -1066,10 +1258,54 @@ describe('non-compacted resource records', () => {
 		);
 
 		expect(result.success).to.equal(true);
-		const channel = 'learningGroups.klausuren-englisch';
+		const channel = 'learningGroups.exams-englisch';
 		expect(objects.get(channel)?.common.name).to.equal('Exams — Englisch');
 		expect(states.get(`${channel}.subject`)?.val).to.equal('Englisch');
 		expect(states.get('learningGroups.json')?.val).to.equal(JSON.stringify([record]));
+	});
+
+	it('retains an existing dynamic channel path when its source record remains stable', async () => {
+		const { adapter, objects, states } = makeTestAdapter();
+		await adapter.createObjectTree();
+		const record: PortalRecord = {
+			format: 'html',
+			id: 'exam-row',
+			section: 'klausuren',
+			attributes: {},
+			fields: [{ header: 'Fach', text: 'Englisch', links: [], attributes: {} }],
+		};
+		const sourceId = createHash('sha256').update(record.id).digest('hex');
+		const legacyChannel = 'learningGroups.klausuren-englisch';
+		objects.set(legacyChannel, {
+			_id: legacyChannel,
+			type: 'channel',
+			common: { name: 'Exams — Englisch' },
+			native: { portalRecordDisplayName: 'Exams — Englisch', portalRecordFieldIds: [] },
+		});
+		states.set('learningGroups.recordIds', state(JSON.stringify([sourceId])));
+		states.set(
+			'learningGroups.recordPaths',
+			state(JSON.stringify({ [sourceId]: [legacyChannel.slice('learningGroups.'.length)] })),
+		);
+
+		const result = await adapter.refreshResource(
+			'learning-groups',
+			() =>
+				Promise.resolve({
+					status: 200,
+					classification: 'success',
+					contentType: 'text/html',
+					body: Buffer.from(''),
+				}),
+			() => ({ status: 'complete', kind: 'learning-groups', records: [record], groups: [] }),
+		);
+
+		expect(result.success).to.equal(true);
+		expect(objects.has(legacyChannel)).to.equal(true);
+		expect(objects.has('learningGroups.exams-englisch')).to.equal(false);
+		expect(JSON.parse(String(states.get('learningGroups.recordPaths')?.val))).to.deep.equal({
+			[sourceId]: ['klausuren-englisch'],
+		});
 	});
 
 	it('continues exposing individual typed field states', async () => {

@@ -1001,6 +1001,26 @@ describe('parsePortalResource', () => {
 		});
 	});
 
+	it('keeps profile field IDs stable when values change and disambiguates repeated labels', () => {
+		const parseProfile = (first: string, second: string, school: string): ReturnType<typeof parsePortalResource> =>
+			parsePortalResource(
+				'account',
+				`<div class="col-md-12"><table class="table table-striped"><tbody><tr><td>Name</td><td>${first}</td></tr><tr><td>name</td><td>${second}</td></tr><tr><td>Schule</td><td>${school}</td></tr></tbody></table></div>`,
+				'text/html',
+			);
+		const first = parseProfile('First', 'Second', 'School A');
+		const updated = parseProfile('Updated first', 'Updated second', 'School B');
+
+		expect(first.status).to.equal('complete');
+		expect(updated.status).to.equal('complete');
+		if (first.status !== 'complete' || updated.status !== 'complete') {
+			return;
+		}
+		const firstIds = first.records.map(record => record.id);
+		expect(updated.records.map(record => record.id)).to.deep.equal(firstIds);
+		expect(new Set(firstIds).size).to.equal(3);
+	});
+
 	it('keeps valid empty exports complete but never converts malformed or unsupported exports to empty', () => {
 		const emptyCsv = parsePortalResource('school-calendar', 'start,end,summary\r\n', 'text/csv');
 		const emptyIcal = parsePortalResource('school-calendar', 'BEGIN:VCALENDAR\r\nEND:VCALENDAR', 'text/calendar');

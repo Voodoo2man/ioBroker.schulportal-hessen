@@ -41,7 +41,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        node-version: [22.x, 24.x]
+        node-version: [22.x, 24.x, 26.x]
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
@@ -49,6 +49,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           os: ${{ matrix.os }}
+          unit-test-check-pattern: 'test:ts'
+          unit-test-command: 'npm run test:ts'
           # Uncomment the following line if your adapter cannot be installed using 'npm ci'
           # install-command: 'npm install'
           build: true

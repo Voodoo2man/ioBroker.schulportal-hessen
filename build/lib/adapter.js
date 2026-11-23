@@ -45,15 +45,6 @@ var import_portal_parser = require("./portal-parser");
 const STUDENTS_BASE = "students";
 const INBOX_BASE = "inbox";
 const INBOX_CATEGORIES = ["read", "unread"];
-const SUBSTITUTION_COLUMN_ALIASES = {
-  stunde: "period",
-  klasse: "class",
-  vertretung: "substitution",
-  lehrkraft: "teacher",
-  fach: "subject",
-  raum: "room",
-  hinweis: "note"
-};
 const SUBSTITUTION_DAY_ALIASES = { today: "Today", tomorrow: "Tomorrow" };
 const ACCOUNT_NAME_STATE = "info.accountName";
 const ACCOUNT_TYPE_STATE = "info.accountType";
@@ -147,9 +138,9 @@ function groupDailySubstitutionRows(records, window) {
       if (typeof pair.header !== "string" || typeof pair.value !== "string") {
         continue;
       }
-      const header = pair.header.trim().toLowerCase();
-      if (Object.hasOwn(SUBSTITUTION_COLUMN_ALIASES, header)) {
-        row[SUBSTITUTION_COLUMN_ALIASES[header]] = pair.value;
+      const header = (0, import_portal_parser.canonicalPortalColumn)(pair.header);
+      if (Object.hasOwn(row, header)) {
+        row[header] = pair.value;
       }
     }
     for (const channel of channels) {
@@ -212,20 +203,18 @@ function getChildLessonSection(record) {
   if (record.childSection) {
     return record.childSection;
   }
-  switch (record.section) {
-    case "mappen":
+  switch ((0, import_portal_parser.canonicalPortalSection)(record.section)) {
+    case "assignments":
       return "assignments";
     case "history":
       return "history";
-    case "attendanceTable":
-    case "anwesend":
+    case "attendance":
       return "attendance";
     case "marks":
       return "marks";
-    case "klausuren":
+    case "exams":
       return "exams";
     case "current":
-    case "aktuell":
       return "current";
     default:
       return "other";
@@ -250,14 +239,38 @@ function getAccountType(records) {
   return "";
 }
 const PORTAL_SECTION_NAMES = /* @__PURE__ */ new Map([
-  ["LGs", "Learning groups"],
-  ["klausuren", "Exams"],
-  ["mappen", "Lesson folders"],
-  ["attendanceTable", "Attendance"]
+  ["learningGroups", "Learning groups"],
+  ["exams", "Exams"],
+  ["assignments", "Lesson folders"],
+  ["attendance", "Attendance"],
+  ["current", "Current"],
+  ["history", "History"],
+  ["marks", "Marks"]
 ]);
-function getReadableRecordName(record, forDisplay = false) {
+const PROFILE_FIELD_NAMES = /* @__PURE__ */ new Map([
+  ["name", "Name"],
+  ["full name", "Full name"],
+  ["display name", "Display name"],
+  ["school", "School"],
+  ["schule", "School"]
+]);
+function getProfileFieldName(record) {
   var _a;
-  const sectionName = record.format === "html" ? record.childSection ? CHILD_LESSON_SECTION_NAMES[record.childSection] : record.section === "own" ? "Personal timetable" : record.section === "all" ? "Class timetable" : (_a = forDisplay ? PORTAL_SECTION_NAMES.get(record.section) : void 0) != null ? _a : record.section : typeof record.fields.name === "string" ? record.fields.name : typeof record.fields.title === "string" ? record.fields.title : typeof record.fields.subject === "string" ? record.fields.subject : typeof record.fields.summary === "string" ? record.fields.summary : typeof record.fields.label === "string" ? record.fields.label : "Portal record";
+  if (record.format !== "json" || record.fields.recordType !== "profile" || typeof record.fields.label !== "string") {
+    return "Profile field";
+  }
+  return (_a = PROFILE_FIELD_NAMES.get(normalizeFieldHeader(record.fields.label))) != null ? _a : "Profile field";
+}
+function getReadableRecordName(record) {
+  var _a;
+  if (record.format === "json" && record.fields.recordType === "profile") {
+    const name = getProfileFieldName(record);
+    return name === "Profile field" && typeof record.fields.label === "string" ? `${name} \u2014 ${record.fields.label}`.slice(0, 160) : name;
+  }
+  if (record.format === "json" && record.fields.recordType === "account-type") {
+    return "Account type";
+  }
+  const sectionName = record.format === "html" ? record.childSection ? CHILD_LESSON_SECTION_NAMES[record.childSection] : record.section === "own" ? "Personal timetable" : record.section === "all" ? "Class timetable" : (_a = PORTAL_SECTION_NAMES.get((0, import_portal_parser.canonicalPortalSection)(record.section))) != null ? _a : record.section : typeof record.fields.name === "string" ? record.fields.name : typeof record.fields.title === "string" ? record.fields.title : typeof record.fields.subject === "string" ? record.fields.subject : typeof record.fields.summary === "string" ? record.fields.summary : typeof record.fields.label === "string" ? record.fields.label : "Portal record";
   const values = record.format === "html" ? record.fields.map((field) => field.text) : [];
   const readableValues = values.map((value) => value.replace(/\s+/gu, " ").trim()).filter((value) => value.length > 0 && !/^[a-f0-9]{24,}$/iu.test(value)).slice(0, 2);
   return [sectionName, ...readableValues].join(" \u2014 ").slice(0, 160);
@@ -381,17 +394,18 @@ function isCompactRecordResource(resource) {
   return resource === "calendar" || resource === "school-calendar" || resource === "file-metadata";
 }
 function getReadableRecordPathName(resource, record) {
+  const name = getReadableRecordName(record);
   if (resource === "calendar" || resource === "school-calendar") {
     const dates = getCalendarEventDates(record);
     if (!dates) {
       throw new Error("Calendar record is missing a readable start date");
     }
-    return `${dates.start}-${getReadableRecordName(record)}`;
+    return `${dates.start}-${name}`;
   }
   if (resource === "account") {
-    return `field-${getReadableRecordName(record)}`;
+    return `field-${getProfileFieldName(record)}`;
   }
-  return getReadableRecordName(record);
+  return name;
 }
 const TIMETABLE_WEEKDAYS = [
   { id: "monday", names: ["monday", "mon", "montag", "mo"] },
@@ -455,12 +469,8 @@ function normalizeFieldLabel(value) {
 function normalizeFieldHeader(value) {
   return normalizeFieldLabel(value).replace(/[^a-z0-9]+/gu, " ").trim();
 }
-const COMBINED_LESSON_DETAILS_HEADER = normalizeFieldHeader(
-  "Thema Datum / Inhalt (wenn hinterlegt) / Hausaufgaben (wenn hinterlegt)"
-);
 function isTimetablePeriodHeader(header) {
-  const normalized = normalizeFieldHeader(header);
-  return normalized === "stunde" || normalized === "period";
+  return (0, import_portal_parser.canonicalPortalColumn)(header) === "period";
 }
 function getVerifiedTimetablePeriodNumber(value) {
   var _a, _b, _c;
@@ -528,20 +538,23 @@ function getFieldId(label, index, usedIds) {
   usedIds.add(candidate);
   return candidate;
 }
-const PORTAL_COLUMN_ALIASES = new Map([
-  ...Object.entries(SUBSTITUTION_COLUMN_ALIASES),
-  ["datum", "date"],
-  ["wochentag", "weekday"],
-  ["tag", "day"],
-  ["kurs", "course"],
-  ["weiteres", "additional information"],
-  ["anwesend", "present"],
-  ["entschuldigt", "excused"],
-  ["andere schulische veranstaltung", "other school event"],
-  [COMBINED_LESSON_DETAILS_HEADER, "lesson details"]
-]);
 const KNOWN_ENGLISH_COLUMN_HEADERS = /* @__PURE__ */ new Set([
-  ...PORTAL_COLUMN_ALIASES.values(),
+  "additional information",
+  "class",
+  "course",
+  "date",
+  "day",
+  "excused",
+  "lesson details",
+  "note",
+  "other school event",
+  "period",
+  "present",
+  "room",
+  "subject",
+  "substitution",
+  "teacher",
+  "weekday",
   "assessment",
   "course name",
   "description",
@@ -560,9 +573,8 @@ const KNOWN_ENGLISH_COLUMN_HEADERS = /* @__PURE__ */ new Set([
   "topic"
 ]);
 function getColumnDescriptor(header, index, value, usedIds, previousIds) {
-  const normalized = normalizeFieldHeader(header != null ? header : "");
-  const alias = PORTAL_COLUMN_ALIASES.get(normalized);
-  const knownName = alias ? `${alias[0].toUpperCase()}${alias.slice(1)}` : header && KNOWN_ENGLISH_COLUMN_HEADERS.has(normalized) ? header.trim() : void 0;
+  const key = (0, import_portal_parser.canonicalPortalColumn)(header != null ? header : "");
+  const knownName = header && KNOWN_ENGLISH_COLUMN_HEADERS.has(key) ? normalizeFieldHeader(header) === key ? header.trim() : `${key[0].toUpperCase()}${key.slice(1)}` : void 0;
   const name = knownName != null ? knownName : `Column ${index + 1}`;
   const columnId = `column_${String(index + 1).padStart(2, "0")}`;
   const id = getFieldId(knownName != null ? knownName : columnId, index, usedIds);
@@ -767,6 +779,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
   activeRefresh = null;
   schoolOptionsCache = null;
   schoolOptionsPromise = null;
+  portalRefreshEnabled = false;
   unloading = false;
   /**
    * Construct the adapter instance.
@@ -790,17 +803,14 @@ class SchulportalHessenAdapter extends utils.Adapter {
     this.log.debug(
       `Admin requested school search (query length: ${typeof query === "string" ? query.trim().length : 0}).`
     );
-    void this.getSchoolOptions().then(
-      (cachedOptions) => {
-        const matches = (0, import_portal_school_directory.searchSchoolOptions)(cachedOptions, query);
-        this.log.debug(`School directory search returned ${matches.length} result(s).`);
-        this.sendTo(message.from, message.command, matches, callback);
-      },
-      () => {
-        this.log.warn("Unable to load the public Schulportal school directory.");
-        this.sendTo(message.from, message.command, [], callback);
-      }
-    );
+    void this.getSchoolOptions().then((options) => {
+      const matches = (0, import_portal_school_directory.searchSchoolOptions)(options, query);
+      this.log.debug(`School directory search returned ${matches.length} result(s).`);
+      return matches;
+    }).catch(() => {
+      this.log.warn("Unable to complete the public Schulportal school search.");
+      return [];
+    }).then((matches) => this.sendTo(message.from, message.command, matches, callback)).catch(() => this.log.warn("Unable to send the school search response."));
   }
   async getSchoolOptions() {
     if (this.schoolOptionsCache && this.schoolOptionsCache.expiresAt > Date.now()) {
@@ -835,16 +845,17 @@ class SchulportalHessenAdapter extends utils.Adapter {
       if (this.unloading) {
         return;
       }
+      this.subscribeStates(REFRESH_STATE);
       if (recoverableSchoolSearchConfig) {
         const code = configErrors.includes(import_config_validation.RECOVERABLE_SCHOOL_ID_ERROR) ? "invalid-school-id" : "account-config-incomplete";
         await this.setInvalidConfigStatus(code);
         return;
       }
-      this.subscribeStates(REFRESH_STATE);
       if (!this.hasConfiguredAccount()) {
         await this.setNotConfiguredStatus();
         return;
       }
+      this.portalRefreshEnabled = true;
       await this.requestRefresh().catch(() => this.log.warn("Initial portal refresh failed."));
     } catch {
       this.log.error("Adapter initialization failed.");
@@ -1021,12 +1032,34 @@ class SchulportalHessenAdapter extends utils.Adapter {
   async setAckState(id, value) {
     await this.setStateAsync(id, { val: value, ack: true });
   }
+  async deleteObjectPreservingCustom(id, options) {
+    const fullId = `${this.namespace}.${id}`;
+    const hasCustomSettings = (object) => {
+      var _a;
+      const custom = (_a = object == null ? void 0 : object.common) == null ? void 0 : _a.custom;
+      return typeof custom === "object" && custom !== null && Object.keys(custom).length > 0;
+    };
+    let hasCustom;
+    if (options == null ? void 0 : options.recursive) {
+      const { rows } = await this.getObjectListAsync({ startkey: fullId, endkey: `${fullId}.\uFFFF` });
+      hasCustom = rows.some(
+        (row) => (row.id === fullId || row.id.startsWith(`${fullId}.`)) && hasCustomSettings(row.value)
+      );
+    } else {
+      hasCustom = hasCustomSettings(await this.getObjectAsync(id));
+    }
+    if (hasCustom) {
+      this.log.debug(`Skipped automatic cleanup in ${id.split(".")[0]}: common.custom settings exist.`);
+      throw new Error("Object contains common.custom configuration");
+    }
+    await this.delObjectAsync(id, options);
+  }
   onStateChange(id, state) {
     if (id !== REFRESH_STATE && id !== `${this.namespace}.${REFRESH_STATE}` || !state || state.ack !== false) {
       return;
     }
     void this.setAckState(REFRESH_STATE, false).catch(() => this.log.warn("Could not acknowledge manual refresh."));
-    if (state.val === true) {
+    if (state.val === true && this.portalRefreshEnabled) {
       void this.requestRefresh().catch(() => this.log.warn("Manual portal refresh failed."));
     }
   }
@@ -1480,20 +1513,25 @@ class SchulportalHessenAdapter extends utils.Adapter {
   }
   async removeUnconfirmedEmptyTimetableDefaults(base) {
     try {
-      const [status, count, lastUpdate, json, recordIds, recordPaths] = await Promise.all([
+      const defaults = { count: 0, lastUpdate: 0, json: "[]", recordIds: "[]", recordPaths: "{}" };
+      const [status, candidates] = await Promise.all([
         this.getStateAsync(`${base}.status`),
-        this.getStateAsync(`${base}.count`),
-        this.getStateAsync(`${base}.lastUpdate`),
-        this.getStateAsync(`${base}.json`),
-        this.getStateAsync(`${base}.recordIds`),
-        this.getStateAsync(`${base}.recordPaths`)
+        Promise.all(
+          Object.entries(defaults).map(async ([stateId, expected]) => {
+            const id = `${base}.${stateId}`;
+            return { id, expected, state: await this.getStateAsync(id) };
+          })
+        )
       ]);
-      if ((status == null ? void 0 : status.val) === "complete" || (status == null ? void 0 : status.val) === "complete-cleanup-pending" || (count == null ? void 0 : count.val) !== 0 || (lastUpdate == null ? void 0 : lastUpdate.val) !== 0 || (json == null ? void 0 : json.val) !== "[]" || (recordIds == null ? void 0 : recordIds.val) !== "[]" || (recordPaths == null ? void 0 : recordPaths.val) !== void 0 && recordPaths.val !== "{}") {
+      if ((status == null ? void 0 : status.val) === "complete" || (status == null ? void 0 : status.val) === "complete-cleanup-pending" || candidates.some(({ state, expected }) => state && state.val !== expected)) {
         return;
       }
-      for (const stateId of ["count", "lastUpdate", "json", "recordIds", "recordPaths"]) {
+      for (const { id, state } of candidates) {
+        if (!state) {
+          continue;
+        }
         try {
-          await this.delObjectAsync(`${base}.${stateId}`);
+          await this.deleteObjectPreservingCustom(id);
         } catch {
           this.log.debug("Could not remove unconfirmed timetable defaults.");
         }
@@ -1625,7 +1663,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
     for (const { child, childPath } of children) {
       const timetableBase = `${STUDENTS_BASE}.${childPath}.timetable`;
       try {
-        await this.delObjectAsync(`${timetableBase}.records`, { recursive: true });
+        await this.deleteObjectPreservingCustom(`${timetableBase}.records`, { recursive: true });
       } catch {
         cleanupByChild.set(child.id, true);
       }
@@ -1664,7 +1702,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
           continue;
         }
         try {
-          await this.delObjectAsync(`${childBase}.${oldPath}`, { recursive: true });
+          await this.deleteObjectPreservingCustom(`${childBase}.${oldPath}`, { recursive: true });
         } catch {
           remainingPaths.push(oldPath);
           failedCleanup.add(child.id);
@@ -1672,7 +1710,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
       }
       if (!currentChildIds.has(child.id) && remainingPaths.length === 0) {
         try {
-          await this.delObjectAsync(`${childBase}.${childPath}`, { recursive: true });
+          await this.deleteObjectPreservingCustom(`${childBase}.${childPath}`, { recursive: true });
           mapping.delete(child.id);
           pendingPaths.delete(child.id);
           continue;
@@ -1879,7 +1917,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
         const failedSectionDeletions = [];
         for (const section of sectionPlan.staleIds) {
           try {
-            await this.delObjectAsync(`${lessonsBase}.${section}`, { recursive: true });
+            await this.deleteObjectPreservingCustom(`${lessonsBase}.${section}`, { recursive: true });
           } catch {
             failedSectionDeletions.push(section);
           }
@@ -1928,7 +1966,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
           pendingForSource.push(oldPath);
           for (const suffix of ["info", "lessons"]) {
             try {
-              await this.delObjectAsync(`${oldChildBase}.${suffix}`, { recursive: true });
+              await this.deleteObjectPreservingCustom(`${oldChildBase}.${suffix}`, { recursive: true });
             } catch {
               cleanupPending = true;
             }
@@ -1936,7 +1974,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
           continue;
         }
         try {
-          await this.delObjectAsync(oldChildBase, { recursive: true });
+          await this.deleteObjectPreservingCustom(oldChildBase, { recursive: true });
         } catch {
           pendingForSource.push(oldPath);
           cleanupPending = true;
@@ -1959,7 +1997,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
   async commitRecordChannel(base, record, recordSegment, legacyObjectIds = [], compact = false, resource) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     const channelId = `${base}.${recordSegment}`;
-    const displayName = getReadableRecordName(record, true);
+    const displayName = getReadableRecordName(record);
     const generatedDisplayName = resource === "timetable" && record.format === "html" && record.section === "own" ? displayName.replace(/^Personal timetable — /u, "") : displayName;
     const existing = await this.getObjectAsync(channelId);
     let objectName = generatedDisplayName;
@@ -2033,7 +2071,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
         continue;
       }
       try {
-        await this.delObjectAsync(`${channelId}.${fieldId}`, { recursive: true });
+        await this.deleteObjectPreservingCustom(`${channelId}.${fieldId}`, { recursive: true });
       } catch {
         failedFieldDeletions.push(fieldId);
       }
@@ -2088,7 +2126,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
     const failedDeletions = [];
     for (const id of plan.staleIds) {
       try {
-        await this.delObjectAsync(`${base}.${id}`, { recursive: true });
+        await this.deleteObjectPreservingCustom(`${base}.${id}`, { recursive: true });
       } catch {
         failedDeletions.push(id);
       }
@@ -2114,7 +2152,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
       return;
     }
     await this.cleanTrackedRecordFields(id, tracked);
-    await this.delObjectAsync(id);
+    await this.deleteObjectPreservingCustom(id);
   }
   async cleanTrackedRecordFields(id, tracked, protectedFields) {
     var _a;
@@ -2125,12 +2163,38 @@ class SchulportalHessenAdapter extends utils.Adapter {
       const childId = `${id}.${field}`;
       const child = await this.getObjectAsync(childId);
       if ((child == null ? void 0 : child.type) === "state" && child._id === `${this.namespace}.${childId}` && typeof ((_a = child.native) == null ? void 0 : _a.portalRecordFieldDisplayName) === "string") {
-        await this.delObjectAsync(childId);
+        await this.deleteObjectPreservingCustom(childId);
       }
     }
   }
+  async readLegacyProfileIds(base) {
+    var _a;
+    const snapshot = await this.getStateAsync(`${base}.json`);
+    const legacyIds = /* @__PURE__ */ new Map();
+    if (typeof (snapshot == null ? void 0 : snapshot.val) !== "string") {
+      return legacyIds;
+    }
+    try {
+      const records = JSON.parse(snapshot.val);
+      if (!this.isParsedRecordArray(records)) {
+        return legacyIds;
+      }
+      const occurrences = /* @__PURE__ */ new Map();
+      for (const record of records) {
+        if (record.format === "json" && ((_a = record.fields) == null ? void 0 : _a.recordType) === "profile" && typeof record.fields.label === "string") {
+          const currentId = (0, import_portal_parser.getProfileFieldId)(record.fields.label, occurrences);
+          if (currentId !== record.id) {
+            legacyIds.set((0, import_dynamic_record_sync.toSafeDynamicRecordId)(currentId), (0, import_dynamic_record_sync.toSafeDynamicRecordId)(record.id));
+          }
+        }
+      }
+    } catch {
+      return /* @__PURE__ */ new Map();
+    }
+    return legacyIds;
+  }
   async commitCompleteResource(resource, records, base = getResourceBase(resource), dateWindow) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
     const substitutionWindow = resource === "substitutions" ? dateWindow != null ? dateWindow : (0, import_portal_dates.getPortalDateWindow)() : void 0;
     const manifestId = `${base}.recordIds`;
     const previousIds = await this.readRecordManifest(manifestId);
@@ -2158,15 +2222,47 @@ class SchulportalHessenAdapter extends utils.Adapter {
       path,
       fixed: true
     }));
+    const existingChannels = /* @__PURE__ */ new Map();
     for (const sourceId of /* @__PURE__ */ new Set([...previousIds, ...previousPaths.keys()])) {
       const paths = (_b = previousPaths.get(sourceId)) != null ? _b : [sourceId];
       for (const path of paths) {
-        if (await this.getObjectAsync(`${base}.${path}`)) {
+        const object = await this.getObjectAsync(`${base}.${path}`);
+        if (object) {
           pathReservations.push({ ownerId: sourceId, path });
+        }
+        if ((object == null ? void 0 : object.type) === "channel" && !existingChannels.has(path)) {
+          existingChannels.set(path, sourceId);
         }
       }
     }
-    const currentPaths = substitutionWindow ? getSubstitutionRecordPaths(records) : allocateSegmentsWithReservations(pathEntries, pathReservations);
+    const retainedPaths = /* @__PURE__ */ new Map();
+    if (!substitutionWindow) {
+      const legacyProfileIds = resource === "account" ? await this.readLegacyProfileIds(base) : void 0;
+      for (const [index, record] of records.entries()) {
+        if (resource !== "account" && (record.format !== "html" || record.childSection || (0, import_portal_parser.canonicalPortalSection)(record.section) === record.section)) {
+          continue;
+        }
+        const { sourceId } = pathEntries[index];
+        const ownerId = previousPaths.has(sourceId) ? sourceId : (_c = legacyProfileIds == null ? void 0 : legacyProfileIds.get(sourceId)) != null ? _c : sourceId;
+        const path = (_d = previousPaths.get(ownerId)) == null ? void 0 : _d.find(
+          (candidate) => SAFE_READABLE_PATH_PATTERN.test(candidate) && !reservedFixedPaths.has(candidate) && existingChannels.get(candidate) === ownerId
+        );
+        if (path) {
+          retainedPaths.set(sourceId, path);
+          reservedFixedPaths.add(path);
+        }
+      }
+    }
+    const currentPaths = substitutionWindow ? getSubstitutionRecordPaths(records) : allocateSegmentsWithReservations(
+      pathEntries.filter(({ sourceId }) => !retainedPaths.has(sourceId)),
+      [
+        ...pathReservations,
+        ...[...retainedPaths].map(([ownerId, path]) => ({ ownerId, path, fixed: true }))
+      ]
+    );
+    for (const [sourceId, path] of retainedPaths) {
+      currentPaths.set(sourceId, path);
+    }
     const currentSegments = new Set([...currentPaths.values()].map((path) => path.toLowerCase()));
     const dataJson = JSON.stringify(records);
     if (typeof dataJson !== "string") {
@@ -2194,7 +2290,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
       }
       const legacyObjectIds = [
         `${base}.${sourceId}`,
-        ...((_c = previousPaths.get(sourceId)) != null ? _c : []).filter((path) => !dailyGroups || !currentSegments.has(path.toLowerCase())).map((path) => `${base}.${path}`),
+        ...((_e = previousPaths.get(sourceId)) != null ? _e : []).filter((path) => !dailyGroups || !currentSegments.has(path.toLowerCase())).map((path) => `${base}.${path}`),
         `${base}.records.${sourceId}`
       ];
       cleanupPending = await this.commitRecordChannel(
@@ -2217,7 +2313,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
     const sourceIds = /* @__PURE__ */ new Set([...previousIds, ...previousPaths.keys()]);
     for (const sourceId of sourceIds) {
       const currentPath = currentPaths.get(sourceId);
-      const oldPaths = new Set((_d = previousPaths.get(sourceId)) != null ? _d : []);
+      const oldPaths = new Set((_f = previousPaths.get(sourceId)) != null ? _f : []);
       if ((previousIds.includes(sourceId) || previousPaths.has(sourceId)) && sourceId !== currentPath) {
         oldPaths.add(sourceId);
       }
@@ -2234,7 +2330,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
               await this.cleanLegacyFieldsAtFixedPath(id, resource);
             }
           } else if (normalizedFixedPaths.has(normalizedOldPath)) {
-            if (((_e = previousPaths.get(sourceId)) == null ? void 0 : _e.includes(oldPath)) || previousIds.includes(sourceId)) {
+            if (((_g = previousPaths.get(sourceId)) == null ? void 0 : _g.includes(oldPath)) || previousIds.includes(sourceId)) {
               await this.cleanTrackedLegacyRecordChannel(id);
             }
           } else if (reservedDailyDates.has(root)) {
@@ -2242,11 +2338,11 @@ class SchulportalHessenAdapter extends utils.Adapter {
               await this.cleanTrackedLegacyRecordChannel(id);
             }
           } else {
-            await this.delObjectAsync(id, { recursive: true });
+            await this.deleteObjectPreservingCustom(id, { recursive: true });
           }
         } catch {
           cleanupPending = true;
-          const failedPaths = (_f = pathsToRemove.get(sourceId)) != null ? _f : /* @__PURE__ */ new Set();
+          const failedPaths = (_h = pathsToRemove.get(sourceId)) != null ? _h : /* @__PURE__ */ new Set();
           failedPaths.add(oldPath);
           pathsToRemove.set(sourceId, failedPaths);
         }
@@ -2254,14 +2350,14 @@ class SchulportalHessenAdapter extends utils.Adapter {
     }
     if (!currentSegments.has("records")) {
       try {
-        await this.delObjectAsync(`${base}.records`, { recursive: true });
+        await this.deleteObjectPreservingCustom(`${base}.records`, { recursive: true });
       } catch {
         cleanupPending = true;
       }
     }
     const nextPaths = /* @__PURE__ */ new Map();
     for (const [sourceId, path] of currentPaths) {
-      nextPaths.set(sourceId, [path, ...(_g = pathsToRemove.get(sourceId)) != null ? _g : []]);
+      nextPaths.set(sourceId, [path, ...(_i = pathsToRemove.get(sourceId)) != null ? _i : []]);
     }
     for (const [sourceId, paths] of pathsToRemove) {
       if (!currentPaths.has(sourceId)) {
@@ -2290,7 +2386,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
         continue;
       }
       try {
-        await this.delObjectAsync(`${base}.${date}`, { recursive: true });
+        await this.deleteObjectPreservingCustom(`${base}.${date}`, { recursive: true });
       } catch {
         failedDeletions.push(date);
       }
