@@ -41,6 +41,10 @@ Write `true` to `info.refresh` to refresh immediately. For troubleshooting, chec
 
 The adapter does not send or edit portal content. Retrieving a conversation **may mark it as read** in the portal. The adapter stores personal data, including inbox messages, in ioBroker. Restrict access to these states and take care when sharing exports or backups. Login credentials stay in ioBroker's central credential store.
 
+<a href="https://www.paypal.com/donate/?hosted_button_id=3RJQGSJNRSHUJ">
+  <img src=".github/Donate.png" alt="Mit PayPal spenden" width="220">
+</a>
+
 ## Changelog
 
 <!--
