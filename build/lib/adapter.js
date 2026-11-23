@@ -1107,7 +1107,11 @@ class SchulportalHessenAdapter extends utils.Adapter {
       session = new import_portal_session.PortalSession({
         schoolId: this.config.schoolId,
         username: credentials.values.login,
-        password: credentials.values.password
+        password: credentials.values.password,
+        scheduleRequestTimeout: (callback, delay) => {
+          const timer = this.setTimeout(callback, delay);
+          return timer === void 0 ? void 0 : () => this.clearTimeout(timer);
+        }
       });
     } catch {
       await this.markAccountUnavailable("credential-unavailable");

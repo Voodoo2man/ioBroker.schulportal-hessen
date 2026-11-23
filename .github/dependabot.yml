@@ -3,10 +3,15 @@ updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
-      interval: monthly
-      day: 16
-      time: "00:05"
+      interval: cron
+      cronjob: "5 0 16 * *"
       timezone: Europe/Berlin
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
     open-pull-requests-limit: 5
     assignees:
       - Voodoo2man
@@ -15,9 +20,8 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: monthly
-      day: 16
-      time: "00:05"
+      interval: cron
+      cronjob: "5 0 16 * *"
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
     assignees:

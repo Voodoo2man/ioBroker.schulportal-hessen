@@ -1356,6 +1356,10 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				schoolId: this.config.schoolId,
 				username: credentials.values.login,
 				password: credentials.values.password,
+				scheduleRequestTimeout: (callback, delay) => {
+					const timer = this.setTimeout(callback, delay);
+					return timer === undefined ? undefined : () => this.clearTimeout(timer);
+				},
 			});
 		} catch {
 			await this.markAccountUnavailable('credential-unavailable');

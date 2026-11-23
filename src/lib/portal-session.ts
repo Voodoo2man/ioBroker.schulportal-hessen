@@ -9,6 +9,7 @@ import {
 	randomInt,
 	timingSafeEqual,
 } from 'node:crypto';
+import { addAbortListener } from 'node:events';
 
 const LOGIN_URL = new URL('https://login.schulportal.hessen.de/');
 const CONNECT_URL = new URL('https://connect.schulportal.hessen.de/');
@@ -109,6 +110,8 @@ export interface PortalSessionOptions {
 	fetchImpl?: typeof fetch;
 	/** Injectable clock for deterministic session-expiry tests. */
 	now?: () => number;
+	/** Schedule an adapter-owned timeout; return its cancellation function or undefined during shutdown. */
+	scheduleRequestTimeout: (callback: () => void, delay: number) => (() => void) | undefined;
 	/** Per-request timeout, from 1 ms through 60 seconds. */
 	requestTimeoutMs?: number;
 	/** Authenticated-session maximum age, from 1 ms through 24 hours. */
@@ -1323,7 +1326,7 @@ export class PortalSession {
 		this.messageSourceIds.clear();
 		this.cookies.clear();
 		for (const controller of this.activeControllers) {
-			controller.abort();
+			controller.abort(new PortalSessionError('closed'));
 		}
 		this.activeControllers.clear();
 	}
@@ -1818,41 +1821,45 @@ export class PortalSession {
 		}
 
 		const controller = new AbortController();
+		const { signal } = controller;
 		this.activeControllers.add(controller);
-		let timedOut = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const timeout = new Promise<never>((_resolve, reject) => {
-			timer = setTimeout(() => {
-				timedOut = true;
-				controller.abort();
-				reject(new PortalSessionError('timeout'));
-			}, this.requestTimeoutMs);
-		});
-		const operation = (async (): Promise<T> => {
-			const response = await this.fetchImpl(safeUrl, {
-				...init,
-				headers,
-				redirect: 'manual',
-				signal: controller.signal,
-			});
-			if (this.closed) {
-				await cancelBody(response);
+		let cancelTimeout: (() => void) | undefined;
+		let abortListener: ReturnType<typeof addAbortListener> | undefined;
+		try {
+			cancelTimeout = this.options.scheduleRequestTimeout(
+				() => controller.abort(new PortalSessionError('timeout')),
+				this.requestTimeoutMs,
+			);
+			if (cancelTimeout === undefined) {
 				throw new PortalSessionError('closed');
 			}
-			this.cookies.store(safeUrl, response.headers);
-			return consume(response);
-		})();
-		try {
-			return await Promise.race([operation, timeout]);
+			signal.throwIfAborted();
+			// Race the whole operation because a transport or response body may ignore abort.
+			const aborted = new Promise<never>((_resolve, reject) => {
+				abortListener = addAbortListener(signal, () => {
+					const reason: unknown = signal.reason;
+					reject(reason instanceof PortalSessionError ? reason : new PortalSessionError('network-error'));
+				});
+			});
+			const operation = (async (): Promise<T> => {
+				const response = await this.fetchImpl(safeUrl, { ...init, headers, redirect: 'manual', signal });
+				if (signal.aborted) {
+					await cancelBody(response);
+					signal.throwIfAborted();
+				}
+				this.cookies.store(safeUrl, response.headers);
+				return consume(response);
+			})();
+			return await Promise.race([operation, aborted]);
 		} catch (error) {
+			signal.throwIfAborted();
 			if (error instanceof PortalSessionError) {
 				throw error;
 			}
-			throw new PortalSessionError(this.closed ? 'closed' : timedOut ? 'timeout' : 'network-error');
+			throw new PortalSessionError('network-error');
 		} finally {
-			if (timer !== undefined) {
-				clearTimeout(timer);
-			}
+			abortListener?.[Symbol.dispose]();
+			cancelTimeout?.();
 			this.activeControllers.delete(controller);
 		}
 	}

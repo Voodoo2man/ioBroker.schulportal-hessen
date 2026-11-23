@@ -1,3 +1,4 @@
+import { rejects } from 'node:assert/strict';
 import {
 	constants,
 	createCipheriv,
@@ -148,6 +149,10 @@ function makeSession(
 		username: 'student',
 		password: 'synthetic-password',
 		fetchImpl,
+		scheduleRequestTimeout: (callback, delay) => {
+			const timer = setTimeout(callback, delay);
+			return () => clearTimeout(timer);
+		},
 		...overrides,
 	});
 }
@@ -951,6 +956,57 @@ describe('PortalSession', () => {
 		expect(error).to.be.instanceOf(PortalSessionError);
 		expect((error as PortalSessionError).code).to.equal('timeout');
 		expect((error as Error).message).not.to.contain('private');
+	});
+
+	it('keeps the request timeout active while reading a stalled response body', async () => {
+		let expire: (() => void) | undefined;
+		const body = new ReadableStream({ pull: () => expire?.() }, { highWaterMark: 0 });
+		const server = createFakePortal({ onRead: () => new Response(body) });
+		const session = makeSession(server.fetchImpl, {
+			scheduleRequestTimeout: callback => {
+				expire = callback;
+				return () => {
+					expire = undefined;
+				};
+			},
+		});
+		await session.authenticate();
+		expect(expire).to.equal(undefined);
+
+		await rejects(session.get('/stundenplan.php'), { name: 'PortalSessionError', code: 'timeout' });
+		expect(expire).to.equal(undefined);
+	});
+
+	it('aborts immediately and cancels the timer on close even when fetch ignores abort', async () => {
+		let signal: RequestInit['signal'];
+		let canceled = false;
+		const session = makeSession(
+			(_input, init) => {
+				signal = init?.signal;
+				return new Promise(() => {
+					// This transport does not react to cancellation.
+				});
+			},
+			{
+				scheduleRequestTimeout: () => () => {
+					canceled = true;
+				},
+			},
+		);
+		const pending = rejects(session.authenticate(), { name: 'PortalSessionError', code: 'closed' });
+		expect(signal?.aborted).to.equal(false);
+		session.close();
+		expect(signal?.aborted).to.equal(true);
+		await pending;
+		expect(canceled).to.equal(true);
+	});
+
+	it('does not start a request when the adapter no longer schedules timers', async () => {
+		const server = createFakePortal();
+		const session = makeSession(server.fetchImpl, { scheduleRequestTimeout: () => undefined });
+
+		await rejects(session.authenticate(), { name: 'PortalSessionError', code: 'closed' });
+		expect(server.requests).to.be.empty;
 	});
 
 	it('aborts in-flight reads on close and rejects further requests', async () => {
