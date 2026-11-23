@@ -55,6 +55,7 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 ### **WORK IN PROGRESS**
 
 - (Voodoo2man) Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.
+- (Voodoo2man) Kept active CI runs on `main` from being cancelled by newer pushes.
 
 ### 0.1.0 (2026-11-23)
 
