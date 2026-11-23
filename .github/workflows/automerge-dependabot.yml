@@ -1,0 +1,177 @@
+name: Automerge Dependabot patch updates
+
+on:
+    workflow_run:
+        workflows: ['Test and Release']
+        types: [completed]
+
+permissions: {}
+
+jobs:
+    validate:
+        if: >-
+            github.event.workflow_run.name == 'Test and Release' &&
+            github.event.workflow_run.event == 'pull_request' &&
+            github.event.workflow_run.conclusion == 'success'
+        runs-on: ubuntu-latest
+        permissions:
+            actions: read
+            pull-requests: read
+        outputs:
+            eligible: ${{ steps.gate.outputs.eligible }}
+            pr_number: ${{ steps.gate.outputs.pr_number }}
+            head_sha: ${{ steps.gate.outputs.head_sha }}
+        steps:
+            - name: Validate CI run and Dependabot metadata
+              id: gate
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  RUN_ID: ${{ github.event.workflow_run.id }}
+                  RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+              run: |
+                  set -euo pipefail
+
+                  workflow_run="$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID")"
+                  if ! jq -e --arg repository "$REPOSITORY" --arg sha "$RUN_SHA" '
+                    .name == "Test and Release"
+                    and .path == ".github/workflows/test-and-release.yml"
+                    and .event == "pull_request"
+                    and .status == "completed"
+                    and .conclusion == "success"
+                    and .head_sha == $sha
+                    and .repository.full_name == $repository
+                  ' <<< "$workflow_run" >/dev/null; then
+                    echo "::notice::Workflow run did not match the successful Test and Release PR run."
+                    exit 0
+                  fi
+
+                  jobs="$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100")"
+                  if ! jq -e '
+                    ([.jobs[] | select(.name == "check-and-lint")] | length) == 1
+                    and ([.jobs[] | select(.name | startswith("adapter-tests"))] | length) == 9
+                    and all(
+                      .jobs[] | select(.name == "check-and-lint" or (.name | startswith("adapter-tests")));
+                      .status == "completed" and .conclusion == "success"
+                    )
+                  ' <<< "$jobs" >/dev/null; then
+                    echo "::notice::The complete lint and nine-job adapter test matrix did not succeed."
+                    exit 0
+                  fi
+
+                  repository_id="$(jq -er '.repository.id' <<< "$workflow_run")"
+                  pr_number="$(jq -r --arg sha "$RUN_SHA" --argjson repository_id "$repository_id" '
+                    [.pull_requests[]?
+                      | select(
+                          .head.sha == $sha
+                          and .base.ref == "main"
+                          and .head.repo.id == $repository_id
+                          and .base.repo.id == $repository_id
+                        )
+                      | .number
+                    ]
+                    | if length == 1 then .[0] else empty end
+                  ' <<< "$workflow_run")"
+                  if [[ -z "$pr_number" ]]; then
+                    echo "::notice::No unique main-branch PR was associated with this exact CI head SHA."
+                    exit 0
+                  fi
+
+                  pull_request="$(gh api "repos/$REPOSITORY/pulls/$pr_number")"
+                  if ! jq -e --arg repository "$REPOSITORY" --arg sha "$RUN_SHA" --argjson number "$pr_number" '
+                    .number == $number
+                    and .state == "open"
+                    and .user.login == "dependabot[bot]"
+                    and .head.sha == $sha
+                    and .head.repo.full_name == $repository
+                    and .base.ref == "main"
+                    and .base.repo.full_name == $repository
+                  ' <<< "$pull_request" >/dev/null; then
+                    echo "::notice::The associated PR is no longer an open Dependabot PR to main at this SHA."
+                    exit 0
+                  fi
+
+                  commits="$(gh api "repos/$REPOSITORY/pulls/$pr_number/commits?per_page=100")"
+                  commit="$(jq -ce --arg sha "$RUN_SHA" '
+                    [.[] | select(.sha == $sha)]
+                    | if length == 1 then .[0] else error("CI head commit not found exactly once in PR") end
+                  ' <<< "$commits")"
+                  if ! jq -e '
+                    .author.login == "dependabot[bot]"
+                    and .commit.verification.verified == true
+                  ' <<< "$commit" >/dev/null; then
+                    echo "::notice::The CI head commit is not a verified Dependabot commit."
+                    exit 0
+                  fi
+
+                  metadata_eligible="$(
+                    COMMIT_MESSAGE="$(jq -r '.commit.message' <<< "$commit")" \
+                    BRANCH_NAME="$(jq -r '.head.ref' <<< "$pull_request")" \
+                    ruby <<'RUBY'
+                  require "yaml"
+
+                  message = ENV.fetch("COMMIT_MESSAGE")
+                  branch = ENV.fetch("BRANCH_NAME")
+                  ecosystem = branch.split("/", 3)[1] if branch.start_with?("dependabot/")
+                  yaml = message.match(/^---\r?\n(?<metadata>[\s\S]*?)\r?\n^\.\.\.(?:\r?\n|$)/m)
+                  abort "Dependabot update metadata is missing" unless yaml
+
+                  metadata = YAML.safe_load(yaml[:metadata], permitted_classes: [], permitted_symbols: [], aliases: false)
+                  dependencies = metadata.is_a?(Hash) ? metadata["updated-dependencies"] : nil
+                  unless dependencies.is_a?(Array) && !dependencies.empty?
+                    abort "Dependabot updated-dependencies metadata is missing"
+                  end
+
+                  npm_ecosystem = ["npm", "npm_and_yarn"].include?(ecosystem)
+                  direct_patch = dependencies.all? do |dependency|
+                    dependency.is_a?(Hash) &&
+                      ["direct:production", "direct:development"].include?(dependency["dependency-type"]) &&
+                      dependency["update-type"] == "version-update:semver-patch"
+                  end
+
+                  puts(npm_ecosystem && direct_patch ? "true" : "false")
+                  RUBY
+                  )"
+
+                  if [[ "$metadata_eligible" == "true" ]]; then
+                    {
+                      echo "eligible=true"
+                      echo "pr_number=$pr_number"
+                      echo "head_sha=$RUN_SHA"
+                    } >> "$GITHUB_OUTPUT"
+                  else
+                    echo "::notice::Dependabot metadata is not exclusively a direct npm patch update."
+                  fi
+
+    merge:
+        needs: validate
+        if: needs.validate.outputs.eligible == 'true'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            pull-requests: write
+        steps:
+            - name: Recheck PR and merge the CI-tested head
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+                  RUN_SHA: ${{ needs.validate.outputs.head_sha }}
+              run: |
+                  set -euo pipefail
+
+                  pull_request="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
+                  jq -e --arg repository "$REPOSITORY" --arg sha "$RUN_SHA" --argjson number "$PR_NUMBER" '
+                    .number == $number
+                    and .state == "open"
+                    and .user.login == "dependabot[bot]"
+                    and .head.sha == $sha
+                    and .head.repo.full_name == $repository
+                    and .base.ref == "main"
+                    and .base.repo.full_name == $repository
+                  ' <<< "$pull_request" >/dev/null
+
+                  gh pr merge "$PR_NUMBER" \
+                    --repo "$REPOSITORY" \
+                    --match-head-commit "$RUN_SHA" \
+                    --merge

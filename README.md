@@ -58,6 +58,7 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 
 - (Voodoo2man) Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.
 - (Voodoo2man) Kept active CI runs on `main` from being cancelled by newer pushes.
+- (Voodoo2man) Enabled auto-merging only for direct npm patch updates after successful CI; branch protection and rulesets remain unchanged.
 
 ### 0.1.0 (2026-11-23)
 
