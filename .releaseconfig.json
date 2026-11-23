@@ -4,6 +4,7 @@
 		"license",
 		"manual-review"
 	],
+	"numChangelogEntries": 2,
 	"exec": {
 		"before_commit": "npm run build"
 	}
