@@ -37,8 +37,6 @@ Look under `schulportal-hessen.<instance>` in the ioBroker object tree:
 
 Write `true` to `info.refresh` to refresh immediately. For troubleshooting, check `info.connection`, `info.status`, `info.lastError`, and the affected data area's `status` and `lastUpdate`. Failed or incomplete reads keep the last successfully retrieved data.
 
-**Upgrading from older builds:** For a legacy multi-account setup, move each account to its own adapter instance and remove the old `accounts` configuration. Update scripts and visualizations that use `account.*` to use the corresponding `profile` or `students` paths. Replace old German field names such as `stunde` with `period`.
-
 ## Privacy and limitations
 
 The adapter does not send or edit portal content. Retrieving a conversation **may mark it as read** in the portal. The adapter stores personal data, including inbox messages, in ioBroker. Restrict access to these states and take care when sharing exports or backups. Login credentials stay in ioBroker's central credential store.
@@ -52,11 +50,8 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 
 ### **WORK IN PROGRESS**
 
-- (Voodoo2man) Enabled automatic npm deployment for tagged releases.
-- (Voodoo2man) Protected custom state settings during cleanup and kept profile field IDs stable when values changed.
-- (Voodoo2man) Fixed refresh acknowledgements for incomplete configurations and made school-search replies more reliable.
-- (Voodoo2man) Used English section names for new record channels and added Node.js 26 to the CI test matrix.
-- (Voodoo2man) Centralized calendar and timetable field normalization without changing existing object IDs or source data.
+- (Voodoo2man) Improved refresh and school search, kept profile IDs stable, and protected custom state settings during cleanup. Standardized calendar and timetable field handling and used English section names for new record channels.
+- (Voodoo2man) Enabled automatic npm publishing for tagged releases and added Node.js 26 to CI.
 
 ### 0.0.1 (2026-11-22)
 
