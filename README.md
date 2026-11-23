@@ -154,6 +154,10 @@ A live refresh confirmed retrieval of the linked personal `#own` timetable secti
 	### **WORK IN PROGRESS**
 -->
 
+### **WORK IN PROGRESS**
+
+- (Voodoo2man) Enabled automatic npm deployment for tagged releases.
+
 ### 0.0.1 (2026-11-22)
 
 - (Voodoo2man) Initial Version
