@@ -47,8 +47,7 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-
-### **WORK IN PROGRESS**
+### 0.1.0 (2026-11-23)
 
 - (Voodoo2man) Improved refresh and school search, kept profile IDs stable, and protected custom state settings during cleanup. Standardized calendar and timetable field handling and used English section names for new record channels.
 - (Voodoo2man) Enabled automatic npm publishing for tagged releases, added Node.js 26 to CI, and switched Dependabot updates to manual merges.
