@@ -198,14 +198,20 @@ function lessonRecord(
 	};
 }
 
-function timetableRecord(uniqueId: string, childId: string, day: string, subject: string): PortalRecord {
+function timetableRecord(
+	uniqueId: string,
+	childId: string,
+	day: string,
+	subject: string,
+	header = 'Day',
+): PortalRecord {
 	return {
 		format: 'html',
 		id: `timetable:${uniqueId.repeat(64)}`,
 		section: 'own',
 		attributes: {},
 		fields: [
-			{ header: 'Day', text: day, links: [], attributes: {} },
+			{ header, text: day, links: [], attributes: {} },
 			{ header: 'Subject', text: subject, links: [], attributes: {} },
 		],
 		context: { childId },
@@ -690,11 +696,14 @@ describe('new root object tree', () => {
 				records: [
 					jsonRecord('name-1', { recordType: 'profile', label: 'Name', value: 'First candidate' }),
 					jsonRecord('name-2', { recordType: 'profile', label: 'Name', value: 'Second candidate' }),
+					jsonRecord('school-variant', { recordType: 'profile', label: 'S-chule', value: 'Example School' }),
 				],
 				groups: [],
 			}),
 		);
 		expect(states.get('profile.name')?.val).to.equal('');
+		expect(states.get('profile.school')?.val).to.equal('Example School');
+		expect(objects.get('profile.field-profile-field')?.common.name).to.equal('Profile field — S-chule');
 		expect(states.get('info.accountType')?.val).to.equal('');
 	});
 });
@@ -708,13 +717,20 @@ describe('calendar resource filtering', () => {
 			const fields =
 				resource === 'calendar'
 					? [
-							{ starts_at: '2026-11-10T23:30:00Z', title: 'Today Event' },
-							{ starts_at: '2026-11-01', ends_at: '2026-11-12', title: 'Ongoing Event' },
-							{ starts_at: '2026-11-12', title: 'Future Event' },
-							{ starts_at: '2026-11-01', ends_at: '2026-11-11', title: 'Ends Today Event' },
+							{ 'Án-fang': '2026-11-10T23:30:00Z', starts_at: '2026-11-11', title: 'Today Event' },
+							{ starts_at: '2026-11-01', Ende: '2026-11-12', title: 'Ongoing Event' },
+							{ starts_at: '2026-11-12', Ende: ' ', title: 'Future Event' },
+							{ Anfang: '2026-11-01', ends_at: '2026-11-11', title: 'Ends Today Event' },
 							{ starts_at: '2026-11-09', title: 'Past Event' },
-							{ title: 'Undated Event' },
-							{ starts_at: '2026-11-13', ends_at: 'not-a-date', title: 'Invalid End' },
+							{ begin: '2026-11-13', title: 'CSV-Only Alias' },
+							{ Anfang: '2026-11-13', Ende: 'not-a-date', title: 'Invalid End' },
+							{ Anfang: '2026-11-13', starts_at: '2026-11-14', title: 'Conflicting Starts' },
+							{
+								Anfang: '2026-11-13',
+								Ende: '2026-11-14',
+								ends_at: '2026-11-15',
+								title: 'Conflicting Ends',
+							},
 						]
 					: [
 							{
@@ -758,8 +774,7 @@ describe('calendar resource filtering', () => {
 			expect(result.success).to.equal(true);
 			const base = resource === 'calendar' ? 'calendar.portal' : 'calendar.school';
 			const savedRecords = JSON.parse(String(states.get(`${base}.json`)?.val)) as PortalRecord[];
-			expect(savedRecords.map(record => record.id)).to.deep.equal(records.slice(0, 4).map(record => record.id));
-			expect(savedRecords[0]?.format === 'json' && savedRecords[0].fields).to.deep.equal(fields[0]);
+			expect(savedRecords).to.deep.equal(records.slice(0, 4));
 			expect(states.get(`${base}.count`)?.val).to.equal(4);
 			const mapping = JSON.parse(String(states.get(`${base}.recordPaths`)?.val)) as Record<string, string[]>;
 			const paths = Object.values(mapping).flat().sort();
@@ -2476,10 +2491,10 @@ describe('parent child timetable object synchronization', () => {
 		const records = [
 			timetableRecord('b', childId, '2026-11-11', 'Mathematics'),
 			timetableRecord('f', childId, '2026-11-11', 'Physics'),
-			timetableRecord('c', childId, '2026-11-12', 'Biology'),
-			timetableRecord('d', childId, '2026-11-10', 'Previous Tuesday'),
-			timetableWeekdayRecord('e', childId, 'tuesday', 'Next Tuesday'),
-			timetableRecord('g', childId, 'Monday', 'Next Monday'),
+			timetableRecord('c', childId, '2026-11-12', 'Biology', 'Plan / Tag (lokal)'),
+			timetableRecord('d', childId, '2026-11-10', 'Previous Tuesday', 'PlanDatum'),
+			timetableWeekdayRecord('e', childId, 'Di.', 'Next Tuesday'),
+			timetableRecord('g', childId, 'Mo.', 'Next Monday', 'PlanWochentag'),
 			timedFridayRecord,
 		];
 		const legacyRecordsBase = `${timetableBase}.records`;

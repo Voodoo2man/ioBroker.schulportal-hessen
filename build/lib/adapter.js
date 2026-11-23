@@ -223,10 +223,9 @@ function getChildLessonSection(record) {
 function isProfileRecord(record) {
   return record.format === "json" && record.fields.recordType === "profile";
 }
-function getProfileFieldValue(records, aliases) {
-  const normalizedAliases = new Set(aliases);
+function getProfileFieldValue(records, field) {
   const values = records.flatMap(
-    (record) => isProfileRecord(record) && typeof record.fields.label === "string" && typeof record.fields.value === "string" && normalizedAliases.has(normalizeCalendarFieldName(record.fields.label)) ? [record.fields.value] : []
+    (record) => isProfileRecord(record) && typeof record.fields.label === "string" && typeof record.fields.value === "string" && (0, import_portal_parser.getProfileSummaryField)(record.fields.label) === field ? [record.fields.value] : []
   );
   return values.length === 1 ? values[0] : "";
 }
@@ -247,19 +246,12 @@ const PORTAL_SECTION_NAMES = /* @__PURE__ */ new Map([
   ["history", "History"],
   ["marks", "Marks"]
 ]);
-const PROFILE_FIELD_NAMES = /* @__PURE__ */ new Map([
-  ["name", "Name"],
-  ["full name", "Full name"],
-  ["display name", "Display name"],
-  ["school", "School"],
-  ["schule", "School"]
-]);
 function getProfileFieldName(record) {
   var _a;
   if (record.format !== "json" || record.fields.recordType !== "profile" || typeof record.fields.label !== "string") {
     return "Profile field";
   }
-  return (_a = PROFILE_FIELD_NAMES.get(normalizeFieldHeader(record.fields.label))) != null ? _a : "Profile field";
+  return (_a = (0, import_portal_parser.getProfileFieldDisplayName)(record.fields.label)) != null ? _a : "Profile field";
 }
 function getReadableRecordName(record) {
   var _a;
@@ -275,42 +267,37 @@ function getReadableRecordName(record) {
   const readableValues = values.map((value) => value.replace(/\s+/gu, " ").trim()).filter((value) => value.length > 0 && !/^[a-f0-9]{24,}$/iu.test(value)).slice(0, 2);
   return [sectionName, ...readableValues].join(" \u2014 ").slice(0, 160);
 }
-const CALENDAR_START_FIELDS = /* @__PURE__ */ new Set(["start", "startsat", "anfang"]);
-const CALENDAR_END_FIELDS = /* @__PURE__ */ new Set(["end", "endsat", "ende"]);
 const BERLIN_CALENDAR_FORMATTER = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Berlin",
   year: "numeric",
   month: "2-digit",
   day: "2-digit"
 });
-function normalizeCalendarFieldName(name) {
-  return name.normalize("NFKD").replace(new RegExp("\\p{M}", "gu"), "").replace(/ß/gu, "ss").toLowerCase().replace(/[^a-z0-9]/gu, "");
-}
 function getCalendarEventDates(record) {
   if (record.format !== "json" || typeof record.fields !== "object" || record.fields === null) {
     return null;
   }
   const fields = record.fields;
-  const start = getCalendarDateField(fields, CALENDAR_START_FIELDS, "start_type", "start_tzid");
+  const start = getCalendarDateField(fields, "start");
   if (!start) {
     return null;
   }
   const hasEnd = Object.entries(fields).some(
-    ([name, value]) => CALENDAR_END_FIELDS.has(normalizeCalendarFieldName(name)) && value !== null && value !== void 0 && !(typeof value === "string" && !value.trim())
+    ([name, value]) => (0, import_portal_parser.canonicalCalendarDateField)(name) === "end" && value !== null && value !== void 0 && !(typeof value === "string" && !value.trim())
   );
-  const end = getCalendarDateField(fields, CALENDAR_END_FIELDS, "end_type", "end_tzid");
+  const end = getCalendarDateField(fields, "end");
   if (hasEnd && !end) {
     return null;
   }
   return { start, end, endIsExclusive: fields.end_type === "DATE" };
 }
-function getCalendarDateField(fields, aliases, typeField, timeZoneField) {
+function getCalendarDateField(fields, kind) {
   var _a;
-  const values = Object.entries(fields).filter(([name]) => aliases.has(normalizeCalendarFieldName(name))).map(([, value]) => value).filter((value) => !(typeof value === "string" && !value.trim()));
+  const values = Object.entries(fields).filter(([name]) => (0, import_portal_parser.canonicalCalendarDateField)(name) === kind).map(([, value]) => value).filter((value) => !(typeof value === "string" && !value.trim()));
   if (values.length === 0 || !values.every((value) => typeof value === "string")) {
     return null;
   }
-  const dates = values.map((value) => parseCalendarDate(value, fields[typeField], fields[timeZoneField]));
+  const dates = values.map((value) => parseCalendarDate(value, fields[`${kind}_type`], fields[`${kind}_tzid`]));
   if (dates.some((date) => date === null) || new Set(dates).size !== 1) {
     return null;
   }
@@ -407,15 +394,6 @@ function getReadableRecordPathName(resource, record) {
   }
   return name;
 }
-const TIMETABLE_WEEKDAYS = [
-  { id: "monday", names: ["monday", "mon", "montag", "mo"] },
-  { id: "tuesday", names: ["tuesday", "tue", "tues", "dienstag", "di"] },
-  { id: "wednesday", names: ["wednesday", "wed", "mittwoch", "mi"] },
-  { id: "thursday", names: ["thursday", "thu", "thur", "thurs", "donnerstag", "do"] },
-  { id: "friday", names: ["friday", "fri", "freitag", "fr"] },
-  { id: "saturday", names: ["saturday", "sat", "samstag", "sa"] },
-  { id: "sunday", names: ["sunday", "sun", "sonntag", "so"] }
-];
 const SAFE_READABLE_PATH_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SAFE_READABLE_RECORD_PATH_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
 function getSubstitutionRecordPaths(records) {
@@ -462,12 +440,6 @@ function allocateSegmentsWithReservations(entries, reservations) {
   }));
   const allocated = (0, import_id_path_segments.allocateIdPathSegments)([...entries, ...reservedEntries]);
   return new Map(entries.map(({ sourceId }) => [sourceId, allocated.get(sourceId)]));
-}
-function normalizeFieldLabel(value) {
-  return value.normalize("NFKD").replace(/[\u0300-\u036f]/gu, "").toLocaleLowerCase("en-US").replace(/ß/gu, "ss");
-}
-function normalizeFieldHeader(value) {
-  return normalizeFieldLabel(value).replace(/[^a-z0-9]+/gu, " ").trim();
 }
 function isTimetablePeriodHeader(header) {
   return (0, import_portal_parser.canonicalPortalColumn)(header) === "period";
@@ -528,7 +500,7 @@ function getTimetableLessonIds(records) {
   });
 }
 function getFieldId(label, index, usedIds) {
-  const base = normalizeFieldLabel(label).replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "").slice(0, 64).replace(/_+$/gu, "") || `column_${String(index + 1).padStart(2, "0")}`;
+  const base = (0, import_portal_parser.normalizePortalLabel)(label).replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "").slice(0, 64).replace(/_+$/gu, "") || `column_${String(index + 1).padStart(2, "0")}`;
   let suffix = 1;
   let candidate = base;
   while (usedIds.has(candidate)) {
@@ -574,7 +546,7 @@ const KNOWN_ENGLISH_COLUMN_HEADERS = /* @__PURE__ */ new Set([
 ]);
 function getColumnDescriptor(header, index, value, usedIds, previousIds) {
   const key = (0, import_portal_parser.canonicalPortalColumn)(header != null ? header : "");
-  const knownName = header && KNOWN_ENGLISH_COLUMN_HEADERS.has(key) ? normalizeFieldHeader(header) === key ? header.trim() : `${key[0].toUpperCase()}${key.slice(1)}` : void 0;
+  const knownName = header && KNOWN_ENGLISH_COLUMN_HEADERS.has(key) ? (0, import_portal_parser.normalizePortalHeader)(header) === key ? header.trim() : `${key[0].toUpperCase()}${key.slice(1)}` : void 0;
   const name = knownName != null ? knownName : `Column ${index + 1}`;
   const columnId = `column_${String(index + 1).padStart(2, "0")}`;
   const id = getFieldId(knownName != null ? knownName : columnId, index, usedIds);
@@ -651,13 +623,9 @@ function getRecordDateFields(record) {
   if (record.format !== "html") {
     return null;
   }
-  const fields = record.fields.filter((field) => {
-    if (typeof field.header !== "string") {
-      return false;
-    }
-    const label = normalizeFieldLabel(field.header);
-    return /date|datum|weekday|wochentag/u.test(label) || /(^|[^a-z])(day|tag)([^a-z]|$)/u.test(label);
-  });
+  const fields = record.fields.filter(
+    (field) => typeof field.header === "string" && (0, import_portal_parser.isTimetableDateHeader)(field.header)
+  );
   return fields.length > 0 ? fields.map((field) => field.text) : null;
 }
 function hasExplicitDateSyntax(value) {
@@ -679,25 +647,20 @@ function getExplicitDate(value) {
   }
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
-function getWeekday(value) {
-  var _a, _b, _c;
-  const token = (_a = normalizeFieldLabel(value.trim()).match(/^[a-z]+/u)) == null ? void 0 : _a[0];
-  return (_c = (_b = TIMETABLE_WEEKDAYS.find((day) => day.names.includes(token != null ? token : ""))) == null ? void 0 : _b.id) != null ? _c : null;
-}
 function getDateWeekday(date) {
   const dayIndex = (/* @__PURE__ */ new Date(`${date}T00:00:00.000Z`)).getUTCDay();
-  return TIMETABLE_WEEKDAYS[(dayIndex + 6) % 7].id;
+  return import_portal_parser.TIMETABLE_WEEKDAY_IDS[(dayIndex + 6) % 7];
 }
 function getNextWeekdayDate(today, weekday) {
   const start = /* @__PURE__ */ new Date(`${today}T00:00:00.000Z`);
   const startIndex = (start.getUTCDay() + 6) % 7;
-  const targetIndex = TIMETABLE_WEEKDAYS.findIndex((day) => day.id === weekday);
+  const targetIndex = import_portal_parser.TIMETABLE_WEEKDAY_IDS.indexOf(weekday);
   start.setUTCDate(start.getUTCDate() + (targetIndex - startIndex + 7) % 7);
   return `${start.getUTCFullYear().toString().padStart(4, "0")}-${String(start.getUTCMonth() + 1).padStart(2, "0")}-${String(start.getUTCDate()).padStart(2, "0")}`;
 }
 function getRecordTimetableDate(record, today) {
   var _a;
-  const contextualWeekday = ((_a = record.context) == null ? void 0 : _a.timetableWeekday) ? getWeekday(record.context.timetableWeekday) : null;
+  const contextualWeekday = ((_a = record.context) == null ? void 0 : _a.timetableWeekday) ? (0, import_portal_parser.normalizeTimetableWeekday)(record.context.timetableWeekday) : null;
   if (contextualWeekday) {
     return getNextWeekdayDate(today, contextualWeekday);
   }
@@ -709,7 +672,7 @@ function getRecordTimetableDate(record, today) {
   const weekdays = [];
   for (const value of dateFields) {
     const date = getExplicitDate(value);
-    const weekday2 = getWeekday(value);
+    const weekday2 = (0, import_portal_parser.normalizeTimetableWeekday)(value);
     if (!date && hasExplicitDateSyntax(value) || !date && !weekday2) {
       return null;
     }
@@ -751,7 +714,7 @@ function groupTimetableRecords(records, today) {
       return null;
     }
     const offset = Math.floor(((/* @__PURE__ */ new Date(`${date}T00:00:00.000Z`)).getTime() - start) / 864e5);
-    if (offset < 0 || offset >= TIMETABLE_WEEKDAYS.length) {
+    if (offset < 0 || offset >= import_portal_parser.TIMETABLE_WEEKDAY_IDS.length) {
       continue;
     }
     buckets.week[getDateWeekday(date)].push(record);
@@ -929,8 +892,8 @@ class SchulportalHessenAdapter extends utils.Adapter {
   }
   async commitAccountSummary(records) {
     await this.setAckState(ACCOUNT_TYPE_STATE, getAccountType(records));
-    await this.setAckState("profile.name", getProfileFieldValue(records, ["name", "fullname"]));
-    await this.setAckState("profile.school", getProfileFieldValue(records, ["school", "schule"]));
+    await this.setAckState("profile.name", getProfileFieldValue(records, "name"));
+    await this.setAckState("profile.school", getProfileFieldValue(records, "school"));
   }
   async createResourceTree(resource, initialStatus, base = getResourceBase(resource), name = RESOURCE_NAMES[resource], includeDataStates = true) {
     await this.ensureChannel(base, name);
@@ -1503,7 +1466,7 @@ class SchulportalHessenAdapter extends utils.Adapter {
     if (typeof (json == null ? void 0 : json.val) === "string" && json.val !== "[]") {
       return true;
     }
-    const timetableDays = ["today", "tomorrow", ...TIMETABLE_WEEKDAYS.map((day) => `week.${day.id}`)];
+    const timetableDays = ["today", "tomorrow", ...import_portal_parser.TIMETABLE_WEEKDAY_IDS.map((day) => `week.${day}`)];
     for (const day of timetableDays) {
       if ((await this.readRecordManifest(`${base}.${day}.lessons.recordIds`)).length > 0) {
         return true;
@@ -1596,11 +1559,11 @@ class SchulportalHessenAdapter extends utils.Adapter {
         { id: "today", name: "Today", records: buckets.today },
         { id: "tomorrow", name: "Tomorrow", records: buckets.tomorrow }
       ];
-      for (const day of TIMETABLE_WEEKDAYS) {
+      for (const day of import_portal_parser.TIMETABLE_WEEKDAY_IDS) {
         dayGroups.push({
-          id: `week.${day.id}`,
-          name: `${day.id[0].toUpperCase()}${day.id.slice(1)}`,
-          records: buckets.week[day.id]
+          id: `week.${day}`,
+          name: `${day[0].toUpperCase()}${day.slice(1)}`,
+          records: buckets.week[day]
         });
       }
       for (const day of dayGroups) {

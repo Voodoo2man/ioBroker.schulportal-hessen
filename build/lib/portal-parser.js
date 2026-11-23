@@ -19,9 +19,17 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var portal_parser_exports = {};
 __export(portal_parser_exports, {
   MAX_SUBSTITUTION_DATES: () => MAX_SUBSTITUTION_DATES,
+  TIMETABLE_WEEKDAY_IDS: () => TIMETABLE_WEEKDAY_IDS,
+  canonicalCalendarDateField: () => canonicalCalendarDateField,
   canonicalPortalColumn: () => canonicalPortalColumn,
   canonicalPortalSection: () => canonicalPortalSection,
+  getProfileFieldDisplayName: () => getProfileFieldDisplayName,
   getProfileFieldId: () => getProfileFieldId,
+  getProfileSummaryField: () => getProfileSummaryField,
+  isTimetableDateHeader: () => isTimetableDateHeader,
+  normalizePortalHeader: () => normalizePortalHeader,
+  normalizePortalLabel: () => normalizePortalLabel,
+  normalizeTimetableWeekday: () => normalizeTimetableWeekday,
   parsePortalResource: () => parsePortalResource,
   parsePortalTimetableChildDetail: () => parsePortalTimetableChildDetail
 });
@@ -308,6 +316,12 @@ function canonicalPortalSection(section) {
       return section;
   }
 }
+function normalizePortalLabel(label) {
+  return label.normalize("NFKD").replace(/[\u0300-\u036f]/gu, "").toLocaleLowerCase("en-US").replace(/ß/gu, "ss");
+}
+function normalizePortalHeader(header) {
+  return normalizePortalLabel(header).replace(/[^a-z0-9]+/gu, " ").trim();
+}
 const PORTAL_COLUMN_ALIASES = /* @__PURE__ */ new Map([
   ["stunde", "period"],
   ["klasse", "class"],
@@ -331,6 +345,48 @@ function canonicalPortalColumn(header) {
   const normalized = header.normalize("NFKD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase().replace(/ß/gu, "ss").replace(/[^a-z0-9]+/gu, " ").trim();
   return (_a = PORTAL_COLUMN_ALIASES.get(normalized)) != null ? _a : normalized;
 }
+const PROFILE_FIELD_DISPLAY_NAMES = /* @__PURE__ */ new Map([
+  ["name", "Name"],
+  ["full name", "Full name"],
+  ["display name", "Display name"],
+  ["school", "School"],
+  ["schule", "School"]
+]);
+function getProfileFieldDisplayName(label) {
+  var _a;
+  return (_a = PROFILE_FIELD_DISPLAY_NAMES.get(normalizePortalHeader(label))) != null ? _a : null;
+}
+function getProfileSummaryField(label) {
+  switch (normalizeRecordKey(label)) {
+    case "name":
+    case "fullname":
+      return "name";
+    case "school":
+    case "schule":
+      return "school";
+    default:
+      return null;
+  }
+}
+const TIMETABLE_WEEKDAYS = [
+  { id: "monday", names: ["monday", "mon", "montag", "mo"] },
+  { id: "tuesday", names: ["tuesday", "tue", "tues", "dienstag", "di"] },
+  { id: "wednesday", names: ["wednesday", "wed", "mittwoch", "mi"] },
+  { id: "thursday", names: ["thursday", "thu", "thur", "thurs", "donnerstag", "do"] },
+  { id: "friday", names: ["friday", "fri", "freitag", "fr"] },
+  { id: "saturday", names: ["saturday", "sat", "samstag", "sa"] },
+  { id: "sunday", names: ["sunday", "sun", "sonntag", "so"] }
+];
+const TIMETABLE_WEEKDAY_IDS = TIMETABLE_WEEKDAYS.map(({ id }) => id);
+function isTimetableDateHeader(header) {
+  const label = normalizePortalLabel(header);
+  return /date|datum|weekday|wochentag/u.test(label) || /(^|[^a-z])(day|tag)([^a-z]|$)/u.test(label);
+}
+function normalizeTimetableWeekday(value) {
+  var _a, _b, _c;
+  const token = (_a = normalizePortalLabel(value.trim()).match(/^[a-z]+/u)) == null ? void 0 : _a[0];
+  return (_c = (_b = TIMETABLE_WEEKDAYS.find((day) => day.names.includes(token != null ? token : ""))) == null ? void 0 : _b.id) != null ? _c : null;
+}
 function getProfileFieldId(label, occurrences) {
   var _a;
   const normalizedLabel = label.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
@@ -353,6 +409,20 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
   }
   return (_a = JSON.stringify(value)) != null ? _a : "null";
+}
+function canonicalCalendarDateField(key) {
+  switch (normalizeRecordKey(key)) {
+    case "start":
+    case "startsat":
+    case "anfang":
+      return "start";
+    case "end":
+    case "endsat":
+    case "ende":
+      return "end";
+    default:
+      return null;
+  }
 }
 const SCHOOL_CALENDAR_HEADER_ALIASES = {
   start: ["start", "begin", "beginning", "startdate", "startdatetime", "anfang", "from"],
@@ -1726,9 +1796,17 @@ function hasFeatureUnavailable(text) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   MAX_SUBSTITUTION_DATES,
+  TIMETABLE_WEEKDAY_IDS,
+  canonicalCalendarDateField,
   canonicalPortalColumn,
   canonicalPortalSection,
+  getProfileFieldDisplayName,
   getProfileFieldId,
+  getProfileSummaryField,
+  isTimetableDateHeader,
+  normalizePortalHeader,
+  normalizePortalLabel,
+  normalizeTimetableWeekday,
   parsePortalResource,
   parsePortalTimetableChildDetail
 });

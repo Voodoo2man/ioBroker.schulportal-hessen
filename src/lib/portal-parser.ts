@@ -591,6 +591,30 @@ export function canonicalPortalSection(section: string): string {
 	}
 }
 
+/**
+ * Normalize source labels for token matching without altering the original text.
+ *
+ * @param label Source label.
+ */
+export function normalizePortalLabel(label: string): string {
+	return label
+		.normalize('NFKD')
+		.replace(/[\u0300-\u036f]/gu, '')
+		.toLocaleLowerCase('en-US')
+		.replace(/ß/gu, 'ss');
+}
+
+/**
+ * Normalize source headers for display-name matching.
+ *
+ * @param header Source header.
+ */
+export function normalizePortalHeader(header: string): string {
+	return normalizePortalLabel(header)
+		.replace(/[^a-z0-9]+/gu, ' ')
+		.trim();
+}
+
 const PORTAL_COLUMN_ALIASES = new Map([
 	['stunde', 'period'],
 	['klasse', 'class'],
@@ -626,6 +650,77 @@ export function canonicalPortalColumn(header: string): string {
 	return PORTAL_COLUMN_ALIASES.get(normalized) ?? normalized;
 }
 
+const PROFILE_FIELD_DISPLAY_NAMES = new Map([
+	['name', 'Name'],
+	['full name', 'Full name'],
+	['display name', 'Display name'],
+	['school', 'School'],
+	['schule', 'School'],
+]);
+
+/**
+ * Resolve a known profile label to its English object name.
+ *
+ * @param label Source profile label.
+ */
+export function getProfileFieldDisplayName(label: string): string | null {
+	return PROFILE_FIELD_DISPLAY_NAMES.get(normalizePortalHeader(label)) ?? null;
+}
+
+/**
+ * Match the distinct, compact labels used by root profile summary states.
+ *
+ * @param label Source profile label.
+ */
+export function getProfileSummaryField(label: string): 'name' | 'school' | null {
+	switch (normalizeRecordKey(label)) {
+		case 'name':
+		case 'fullname':
+			return 'name';
+		case 'school':
+		case 'schule':
+			return 'school';
+		default:
+			return null;
+	}
+}
+
+/** Canonical weekday ID used for timetable routing. */
+export type TimetableWeekdayId = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+
+const TIMETABLE_WEEKDAYS: readonly { id: TimetableWeekdayId; names: readonly string[] }[] = [
+	{ id: 'monday', names: ['monday', 'mon', 'montag', 'mo'] },
+	{ id: 'tuesday', names: ['tuesday', 'tue', 'tues', 'dienstag', 'di'] },
+	{ id: 'wednesday', names: ['wednesday', 'wed', 'mittwoch', 'mi'] },
+	{ id: 'thursday', names: ['thursday', 'thu', 'thur', 'thurs', 'donnerstag', 'do'] },
+	{ id: 'friday', names: ['friday', 'fri', 'freitag', 'fr'] },
+	{ id: 'saturday', names: ['saturday', 'sat', 'samstag', 'sa'] },
+	{ id: 'sunday', names: ['sunday', 'sun', 'sonntag', 'so'] },
+];
+
+/** Canonical timetable weekdays in Monday-first order. */
+export const TIMETABLE_WEEKDAY_IDS: readonly TimetableWeekdayId[] = TIMETABLE_WEEKDAYS.map(({ id }) => id);
+
+/**
+ * Recognize date/weekday fields in timetable rows, including composite headings.
+ *
+ * @param header Source table header.
+ */
+export function isTimetableDateHeader(header: string): boolean {
+	const label = normalizePortalLabel(header);
+	return /date|datum|weekday|wochentag/u.test(label) || /(^|[^a-z])(day|tag)([^a-z]|$)/u.test(label);
+}
+
+/**
+ * Resolve the leading weekday token of a timetable row value to its canonical ID.
+ *
+ * @param value Source cell text or canonical context weekday.
+ */
+export function normalizeTimetableWeekday(value: string): TimetableWeekdayId | null {
+	const token = normalizePortalLabel(value.trim()).match(/^[a-z]+/u)?.[0];
+	return TIMETABLE_WEEKDAYS.find(day => day.names.includes(token ?? ''))?.id ?? null;
+}
+
 /**
  * Identify a profile field independently of its value, including repeated labels.
  *
@@ -657,6 +752,26 @@ function canonicalJson(value: unknown): string {
 			.join(',')}}`;
 	}
 	return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * Classify only the date keys recognized in JSON event records, not CSV headings.
+ *
+ * @param key Source event key.
+ */
+export function canonicalCalendarDateField(key: string): 'start' | 'end' | null {
+	switch (normalizeRecordKey(key)) {
+		case 'start':
+		case 'startsat':
+		case 'anfang':
+			return 'start';
+		case 'end':
+		case 'endsat':
+		case 'ende':
+			return 'end';
+		default:
+			return null;
+	}
 }
 
 type SchoolCalendarField =

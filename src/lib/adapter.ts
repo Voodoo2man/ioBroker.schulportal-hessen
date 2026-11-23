@@ -15,15 +15,24 @@ import { PortalSession, PortalSessionError } from './portal-session';
 import { fetchSchoolOptions, searchSchoolOptions, type SchoolOption } from './portal-school-directory';
 import { RefreshCoordinator } from './refresh-coordinator';
 import {
+	canonicalCalendarDateField,
 	canonicalPortalColumn,
 	canonicalPortalSection,
+	getProfileFieldDisplayName,
 	getProfileFieldId,
+	getProfileSummaryField,
+	isTimetableDateHeader,
+	normalizePortalHeader,
+	normalizePortalLabel,
+	normalizeTimetableWeekday,
 	parsePortalResource,
+	TIMETABLE_WEEKDAY_IDS,
 	type ChildLessonSection,
 	type PortalChildLessons,
 	type PortalChildTimetable,
 	type PortalHtmlRecord,
 	type PortalRecord,
+	type TimetableWeekdayId,
 } from './portal-parser';
 
 const STUDENTS_BASE = 'students';
@@ -234,13 +243,12 @@ function isProfileRecord(record: PortalRecord): record is Extract<PortalRecord, 
 	return record.format === 'json' && record.fields.recordType === 'profile';
 }
 
-function getProfileFieldValue(records: readonly PortalRecord[], aliases: readonly string[]): string {
-	const normalizedAliases = new Set(aliases);
+function getProfileFieldValue(records: readonly PortalRecord[], field: 'name' | 'school'): string {
 	const values = records.flatMap(record =>
 		isProfileRecord(record) &&
 		typeof record.fields.label === 'string' &&
 		typeof record.fields.value === 'string' &&
-		normalizedAliases.has(normalizeCalendarFieldName(record.fields.label))
+		getProfileSummaryField(record.fields.label) === field
 			? [record.fields.value]
 			: [],
 	);
@@ -269,19 +277,12 @@ const PORTAL_SECTION_NAMES = new Map([
 	['history', 'History'],
 	['marks', 'Marks'],
 ]);
-const PROFILE_FIELD_NAMES = new Map([
-	['name', 'Name'],
-	['full name', 'Full name'],
-	['display name', 'Display name'],
-	['school', 'School'],
-	['schule', 'School'],
-]);
 
 function getProfileFieldName(record: PortalRecord): string {
 	if (record.format !== 'json' || record.fields.recordType !== 'profile' || typeof record.fields.label !== 'string') {
 		return 'Profile field';
 	}
-	return PROFILE_FIELD_NAMES.get(normalizeFieldHeader(record.fields.label)) ?? 'Profile field';
+	return getProfileFieldDisplayName(record.fields.label) ?? 'Profile field';
 }
 
 function getReadableRecordName(record: PortalRecord): string {
@@ -322,8 +323,6 @@ function getReadableRecordName(record: PortalRecord): string {
 	return [sectionName, ...readableValues].join(' — ').slice(0, 160);
 }
 
-const CALENDAR_START_FIELDS = new Set(['start', 'startsat', 'anfang']);
-const CALENDAR_END_FIELDS = new Set(['end', 'endsat', 'ende']);
 const BERLIN_CALENDAR_FORMATTER = new Intl.DateTimeFormat('en-GB', {
 	timeZone: 'Europe/Berlin',
 	year: 'numeric',
@@ -337,52 +336,38 @@ interface CalendarEventDates {
 	endIsExclusive: boolean;
 }
 
-function normalizeCalendarFieldName(name: string): string {
-	return name
-		.normalize('NFKD')
-		.replace(/\p{M}/gu, '')
-		.replace(/ß/gu, 'ss')
-		.toLowerCase()
-		.replace(/[^a-z0-9]/gu, '');
-}
-
 function getCalendarEventDates(record: PortalRecord): CalendarEventDates | null {
 	if (record.format !== 'json' || typeof record.fields !== 'object' || record.fields === null) {
 		return null;
 	}
 	const fields = record.fields;
-	const start = getCalendarDateField(fields, CALENDAR_START_FIELDS, 'start_type', 'start_tzid');
+	const start = getCalendarDateField(fields, 'start');
 	if (!start) {
 		return null;
 	}
 	const hasEnd = Object.entries(fields).some(
 		([name, value]) =>
-			CALENDAR_END_FIELDS.has(normalizeCalendarFieldName(name)) &&
+			canonicalCalendarDateField(name) === 'end' &&
 			value !== null &&
 			value !== undefined &&
 			!(typeof value === 'string' && !value.trim()),
 	);
-	const end = getCalendarDateField(fields, CALENDAR_END_FIELDS, 'end_type', 'end_tzid');
+	const end = getCalendarDateField(fields, 'end');
 	if (hasEnd && !end) {
 		return null;
 	}
 	return { start, end, endIsExclusive: fields.end_type === 'DATE' };
 }
 
-function getCalendarDateField(
-	fields: Readonly<Record<string, unknown>>,
-	aliases: ReadonlySet<string>,
-	typeField: string,
-	timeZoneField: string,
-): string | null {
+function getCalendarDateField(fields: Readonly<Record<string, unknown>>, kind: 'start' | 'end'): string | null {
 	const values = Object.entries(fields)
-		.filter(([name]) => aliases.has(normalizeCalendarFieldName(name)))
+		.filter(([name]) => canonicalCalendarDateField(name) === kind)
 		.map(([, value]) => value)
 		.filter(value => !(typeof value === 'string' && !value.trim()));
 	if (values.length === 0 || !values.every((value): value is string => typeof value === 'string')) {
 		return null;
 	}
-	const dates = values.map(value => parseCalendarDate(value, fields[typeField], fields[timeZoneField]));
+	const dates = values.map(value => parseCalendarDate(value, fields[`${kind}_type`], fields[`${kind}_tzid`]));
 	if (dates.some(date => date === null) || new Set(dates).size !== 1) {
 		return null;
 	}
@@ -494,18 +479,6 @@ function getReadableRecordPathName(resource: PortalResourceKind, record: PortalR
 	return name;
 }
 
-type TimetableWeekdayId = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
-
-const TIMETABLE_WEEKDAYS: readonly { id: TimetableWeekdayId; names: readonly string[] }[] = [
-	{ id: 'monday', names: ['monday', 'mon', 'montag', 'mo'] },
-	{ id: 'tuesday', names: ['tuesday', 'tue', 'tues', 'dienstag', 'di'] },
-	{ id: 'wednesday', names: ['wednesday', 'wed', 'mittwoch', 'mi'] },
-	{ id: 'thursday', names: ['thursday', 'thu', 'thur', 'thurs', 'donnerstag', 'do'] },
-	{ id: 'friday', names: ['friday', 'fri', 'freitag', 'fr'] },
-	{ id: 'saturday', names: ['saturday', 'sat', 'samstag', 'sa'] },
-	{ id: 'sunday', names: ['sunday', 'sun', 'sonntag', 'so'] },
-];
-
 interface TimetableBuckets {
 	today: PortalRecord[];
 	tomorrow: PortalRecord[];
@@ -589,20 +562,6 @@ function allocateSegmentsWithReservations(
 	return new Map(entries.map(({ sourceId }) => [sourceId, allocated.get(sourceId)!]));
 }
 
-function normalizeFieldLabel(value: string): string {
-	return value
-		.normalize('NFKD')
-		.replace(/[\u0300-\u036f]/gu, '')
-		.toLocaleLowerCase('en-US')
-		.replace(/ß/gu, 'ss');
-}
-
-function normalizeFieldHeader(value: string): string {
-	return normalizeFieldLabel(value)
-		.replace(/[^a-z0-9]+/gu, ' ')
-		.trim();
-}
-
 function isTimetablePeriodHeader(header: string): boolean {
 	return canonicalPortalColumn(header) === 'period';
 }
@@ -678,7 +637,7 @@ function getTimetableLessonIds(records: readonly PortalRecord[]): string[] {
 
 function getFieldId(label: string, index: number, usedIds: Set<string>): string {
 	const base =
-		normalizeFieldLabel(label)
+		normalizePortalLabel(label)
 			.replace(/[^a-z0-9]+/gu, '_')
 			.replace(/^_+|_+$/gu, '')
 			.slice(0, 64)
@@ -738,7 +697,7 @@ function getColumnDescriptor(
 	const key = canonicalPortalColumn(header ?? '');
 	const knownName =
 		header && KNOWN_ENGLISH_COLUMN_HEADERS.has(key)
-			? normalizeFieldHeader(header) === key
+			? normalizePortalHeader(header) === key
 				? header.trim()
 				: `${key[0].toUpperCase()}${key.slice(1)}`
 			: undefined;
@@ -830,13 +789,9 @@ function getRecordDateFields(record: PortalRecord): string[] | null {
 	if (record.format !== 'html') {
 		return null;
 	}
-	const fields = record.fields.filter(field => {
-		if (typeof field.header !== 'string') {
-			return false;
-		}
-		const label = normalizeFieldLabel(field.header);
-		return /date|datum|weekday|wochentag/u.test(label) || /(^|[^a-z])(day|tag)([^a-z]|$)/u.test(label);
-	});
+	const fields = record.fields.filter(
+		field => typeof field.header === 'string' && isTimetableDateHeader(field.header),
+	);
 	return fields.length > 0 ? fields.map(field => field.text) : null;
 }
 
@@ -865,26 +820,23 @@ function getExplicitDate(value: string): string | null {
 	return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function getWeekday(value: string): TimetableWeekdayId | null {
-	const token = normalizeFieldLabel(value.trim()).match(/^[a-z]+/u)?.[0];
-	return TIMETABLE_WEEKDAYS.find(day => day.names.includes(token ?? ''))?.id ?? null;
-}
-
 function getDateWeekday(date: string): TimetableWeekdayId {
 	const dayIndex = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-	return TIMETABLE_WEEKDAYS[(dayIndex + 6) % 7].id;
+	return TIMETABLE_WEEKDAY_IDS[(dayIndex + 6) % 7];
 }
 
 function getNextWeekdayDate(today: string, weekday: TimetableWeekdayId): string {
 	const start = new Date(`${today}T00:00:00.000Z`);
 	const startIndex = (start.getUTCDay() + 6) % 7;
-	const targetIndex = TIMETABLE_WEEKDAYS.findIndex(day => day.id === weekday);
+	const targetIndex = TIMETABLE_WEEKDAY_IDS.indexOf(weekday);
 	start.setUTCDate(start.getUTCDate() + ((targetIndex - startIndex + 7) % 7));
 	return `${start.getUTCFullYear().toString().padStart(4, '0')}-${String(start.getUTCMonth() + 1).padStart(2, '0')}-${String(start.getUTCDate()).padStart(2, '0')}`;
 }
 
 function getRecordTimetableDate(record: PortalRecord, today: string): string | null {
-	const contextualWeekday = record.context?.timetableWeekday ? getWeekday(record.context.timetableWeekday) : null;
+	const contextualWeekday = record.context?.timetableWeekday
+		? normalizeTimetableWeekday(record.context.timetableWeekday)
+		: null;
 	if (contextualWeekday) {
 		return getNextWeekdayDate(today, contextualWeekday);
 	}
@@ -896,7 +848,7 @@ function getRecordTimetableDate(record: PortalRecord, today: string): string | n
 	const weekdays: TimetableWeekdayId[] = [];
 	for (const value of dateFields) {
 		const date = getExplicitDate(value);
-		const weekday = getWeekday(value);
+		const weekday = normalizeTimetableWeekday(value);
 		if ((!date && hasExplicitDateSyntax(value)) || (!date && !weekday)) {
 			return null;
 		}
@@ -939,7 +891,7 @@ function groupTimetableRecords(records: readonly PortalRecord[], today: string):
 			return null;
 		}
 		const offset = Math.floor((new Date(`${date}T00:00:00.000Z`).getTime() - start) / 86_400_000);
-		if (offset < 0 || offset >= TIMETABLE_WEEKDAYS.length) {
+		if (offset < 0 || offset >= TIMETABLE_WEEKDAY_IDS.length) {
 			continue;
 		}
 		buckets.week[getDateWeekday(date)].push(record);
@@ -1148,8 +1100,8 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 
 	private async commitAccountSummary(records: readonly PortalRecord[]): Promise<void> {
 		await this.setAckState(ACCOUNT_TYPE_STATE, getAccountType(records));
-		await this.setAckState('profile.name', getProfileFieldValue(records, ['name', 'fullname']));
-		await this.setAckState('profile.school', getProfileFieldValue(records, ['school', 'schule']));
+		await this.setAckState('profile.name', getProfileFieldValue(records, 'name'));
+		await this.setAckState('profile.school', getProfileFieldValue(records, 'school'));
 	}
 
 	private async createResourceTree(
@@ -1883,7 +1835,7 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 		if (typeof json?.val === 'string' && json.val !== '[]') {
 			return true;
 		}
-		const timetableDays = ['today', 'tomorrow', ...TIMETABLE_WEEKDAYS.map(day => `week.${day.id}`)];
+		const timetableDays = ['today', 'tomorrow', ...TIMETABLE_WEEKDAY_IDS.map(day => `week.${day}`)];
 		for (const day of timetableDays) {
 			if ((await this.readRecordManifest(`${base}.${day}.lessons.recordIds`)).length > 0) {
 				return true;
@@ -1982,11 +1934,11 @@ export class SchulportalHessenAdapter extends utils.Adapter {
 				{ id: 'today', name: 'Today', records: buckets.today },
 				{ id: 'tomorrow', name: 'Tomorrow', records: buckets.tomorrow },
 			];
-			for (const day of TIMETABLE_WEEKDAYS) {
+			for (const day of TIMETABLE_WEEKDAY_IDS) {
 				dayGroups.push({
-					id: `week.${day.id}`,
-					name: `${day.id[0].toUpperCase()}${day.id.slice(1)}`,
-					records: buckets.week[day.id],
+					id: `week.${day}`,
+					name: `${day[0].toUpperCase()}${day.slice(1)}`,
+					records: buckets.week[day],
 				});
 			}
 
