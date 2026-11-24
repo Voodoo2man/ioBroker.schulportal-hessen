@@ -53,8 +53,7 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
-
-### **WORK IN PROGRESS**
+### 0.1.1 (2026-11-24)
 
 - (Voodoo2man) Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.
 - (Voodoo2man) Enabled recommended workflow concurrency to cancel superseded runs.

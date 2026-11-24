@@ -1,108 +1,121 @@
 {
-	"common": {
-		"name": "schulportal-hessen",
-		"version": "0.1.0",
-		"news": {
-			"0.1.0": {
-				"en": "Improved refresh and school search, kept profile IDs stable, and protected custom state settings during cleanup. Standardized calendar and timetable field handling and used English section names for new record channels.\nEnabled automatic npm publishing for tagged releases, added Node.js 26 to CI, and switched Dependabot updates to manual merges.",
-				"de": "Aktualisierung und Schulsuche verbessert, Profil-IDs stabilisiert und benutzerdefinierte Datenpunkt-Einstellungen bei der Bereinigung geschützt. Kalender- und Stundenplanfelder vereinheitlicht; neue Datensatzkanäle verwenden englische Abschnittsnamen.\nAutomatische npm-Veröffentlichung für getaggte Releases eingerichtet, Node.js 26 in die CI aufgenommen und Dependabot-Updates auf manuelles Zusammenführen umgestellt.",
-				"ru": "Улучшены обновление данных и поиск школ; идентификаторы профилей остаются стабильными, а пользовательские настройки состояний сохраняются при очистке. Унифицирована обработка полей календаря и расписания; новые каналы записей используют английские названия разделов.\nВключена автоматическая публикация npm для релизов с тегами, в CI добавлена Node.js 26, обновления Dependabot теперь объединяются вручную.",
-				"pt": "Melhoradas a atualização e a pesquisa de escolas, mantidos os IDs de perfil estáveis e protegidas as configurações personalizadas dos estados durante a limpeza. Padronizado o tratamento dos campos do calendário e do horário; novos canais de registos usam nomes de secções em inglês.\nAtivada a publicação automática no npm para versões com tags, adicionado o Node.js 26 à CI e alteradas as atualizações do Dependabot para integração manual.",
-				"nl": "Het vernieuwen en zoeken naar scholen verbeterd, profiel-ID’s stabiel gehouden en aangepaste statusinstellingen bij het opschonen beschermd. Velden voor agenda en lesrooster gestandaardiseerd; nieuwe recordkanalen gebruiken Engelse sectienamen.\nAutomatische npm-publicatie voor releases met tags ingeschakeld, Node.js 26 aan CI toegevoegd en Dependabot-updates ingesteld op handmatig samenvoegen.",
-				"fr": "Amélioration de l’actualisation et de la recherche d’écoles, stabilisation des identifiants de profil et protection des paramètres d’état personnalisés lors du nettoyage. Normalisation des champs du calendrier et de l’emploi du temps ; les nouveaux canaux d’enregistrement utilisent des noms de section en anglais.\nActivation de la publication npm automatique pour les versions étiquetées, ajout de Node.js 26 à la CI et passage à la fusion manuelle des mises à jour Dependabot.",
-				"it": "Migliorati l’aggiornamento e la ricerca delle scuole, mantenuti stabili gli ID dei profili e protette le impostazioni personalizzate degli stati durante la pulizia. Uniformata la gestione dei campi di calendario e orario; i nuovi canali dei record usano nomi di sezione in inglese.\nAttivata la pubblicazione automatica su npm per le versioni con tag, aggiunto Node.js 26 alla CI e impostata l’unione manuale degli aggiornamenti Dependabot.",
-				"es": "Mejoradas la actualización y la búsqueda de centros, estabilizados los ID de perfil y protegidos los ajustes personalizados de los estados durante la limpieza. Unificado el tratamiento de los campos de calendario y horario; los nuevos canales de registros usan nombres de sección en inglés.\nActivada la publicación automática en npm para las versiones etiquetadas, añadido Node.js 26 a la CI y configurada la integración manual de las actualizaciones de Dependabot.",
-				"pl": "Ulepszono odświeżanie danych i wyszukiwanie szkół, ustabilizowano identyfikatory profili i zabezpieczono ustawienia niestandardowe stanów podczas czyszczenia. Ujednolicono obsługę pól kalendarza i planu lekcji; nowe kanały rekordów używają angielskich nazw sekcji.\nWłączono automatyczne publikowanie w npm wersji oznaczonych tagami, dodano Node.js 26 do CI i wprowadzono ręczne scalanie aktualizacji Dependabot.",
-				"uk": "Покращено оновлення даних і пошук шкіл, стабілізовано ідентифікатори профілів і захищено користувацькі налаштування станів під час очищення. Уніфіковано обробку полів календаря й розкладу; нові канали записів використовують англійські назви розділів.\nУвімкнено автоматичне публікування в npm для випусків із тегами, додано Node.js 26 до CI й переведено оновлення Dependabot на ручне злиття.",
-				"zh-cn": "改进了刷新和学校搜索，保持个人资料 ID 稳定，并在清理时保护状态的自定义设置。统一处理日历和课程表字段；新建的记录通道使用英文分区名称。\n为带标签的版本启用自动 npm 发布，在 CI 中加入 Node.js 26，并改为手动合并 Dependabot 更新。"
-			},
-			"0.0.1": {
-				"en": "initial release",
-				"de": "Erstveröffentlichung",
-				"ru": "Начальная версия",
-				"pt": "lançamento inicial",
-				"nl": "Eerste uitgave",
-				"fr": "Première version",
-				"it": "Versione iniziale",
-				"es": "Versión inicial",
-				"pl": "Pierwsze wydanie",
-				"uk": "Початкова версія",
-				"zh-cn": "首次出版"
-			}
-		},
-		"titleLang": {
-			"en": "Schulportal Hessen",
-			"de": "Schulportal Hessen",
-			"ru": "Schulportal Hessen",
-			"pt": "Schulportal Hessen",
-			"nl": "Schulportal Hessen",
-			"fr": "Schulportal Hessen",
-			"it": "Schulportal Hessen",
-			"es": "Schulportal Hessen",
-			"pl": "Schulportal Hessen",
-			"uk": "Schulportal Hessen",
-			"zh-cn": "Schulportal Hessen"
-		},
-		"desc": {
-			"en": "Adapter for the Schulportal Hessen school portal",
-			"de": "Adapter für das Schulportal Hessen",
-			"ru": "Адаптер для школьного портала Schulportal Hessen",
-			"pt": "Adaptador para o portal escolar Schulportal Hessen",
-			"nl": "Adapter voor het Schulportal Hessen-schoolportaal",
-			"fr": "Adaptateur pour le portail scolaire Schulportal Hessen",
-			"it": "Adattatore per il portale scolastico Schulportal Hessen",
-			"es": "Adaptador para el portal escolar Schulportal Hessen",
-			"pl": "Adapter do portalu szkolnego Schulportal Hessen",
-			"uk": "Адаптер для шкільного порталу Schulportal Hessen",
-			"zh-cn": "Schulportal Hessen 学校门户的适配器"
-		},
-		"authors": [
-			"Voodoo2man <Voodoo2man@outlook.de>"
-		],
-		"keywords": [
-			"school",
-			"education",
-			"schulportal",
-			"hessen"
-		],
-		"licenseInformation": {
-			"type": "free",
-			"license": "MIT"
-		},
-		"platform": "Javascript/Node.js",
-		"icon": "schulportal-hessen.png",
-		"enabled": true,
-		"extIcon": "https://raw.githubusercontent.com/Voodoo2man/ioBroker.schulportal-hessen/main/admin/schulportal-hessen.png",
-		"readme": "https://github.com/Voodoo2man/ioBroker.schulportal-hessen/blob/main/README.md",
-		"loglevel": "info",
-		"tier": 3,
-		"mode": "daemon",
-		"type": "misc-data",
-		"compact": true,
-		"messagebox": true,
-		"connectionType": "cloud",
-		"dataSource": "poll",
-		"adminUI": {
-			"config": "json"
-		},
-		"dependencies": [
-			{
-				"js-controller": ">=7.2.2"
-			}
-		],
-		"globalDependencies": [
-			{
-				"admin": ">=8.3.5"
-			}
-		]
-	},
-	"native": {
-		"accountName": "",
-		"schoolSearch": "",
-		"schoolId": "",
-		"credentialId": "",
-		"refreshIntervalMinutes": 60
-	},
-	"objects": [],
-	"instanceObjects": []
+  "common": {
+    "name": "schulportal-hessen",
+    "version": "0.1.1",
+    "news": {
+      "0.1.1": {
+        "en": "Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.\nEnabled recommended workflow concurrency to cancel superseded runs.\nEnabled auto-merging only for direct npm patch updates after successful CI; branch protection and rulesets remain unchanged.",
+        "de": "Archivierte ältere Versionshinweise und erhöhte Dependabot auf 15 Pull Requests pro Ökosystem.\nAktiviert die empfohlene Workflow-Absage ersetzter Läufe.\nAuto-Merging nur für direkte NPM-Patches nach erfolgtem CI aktiviert; Branch-Schutz und Regelsätze bleiben unverändert.",
+        "ru": "Заархивированы примечания к предыдущим версиям и увеличено ограничение Dependabot до 15 открытых pull-запросов на экосистему.\nВключен рекомендуемый параллелизм рабочих процессов для отмены замененных запусков.\nАвтоматическое слияние включено только для прямых обновлений патчей npm после успешного CI; защита ветвей и наборы правил остаются без изменений.",
+        "pt": "Arquivou notas antigas e elevou o limite de Dependabot para 15 pull requests por ecossistema.\nAtivou a simultaneidade recomendada para cancelar execuções anuladas.\nA fusão automática só é ativada para atualizações diretas do npm após o CI bem-sucedido; a proteção de ramificações e regras não muda.",
+        "nl": "Oudere releasenotes gearchiveerd en de Dependabot-limiet verhoogd naar 15 open pull-aanvragen per ecosysteem.\nAanbevolen gelijktijdige workflow ingeschakeld om achterhaalde runs te annuleren.\nAutomatische samenvoeging is alleen ingeschakeld voor directe updates van npm-patches na een succesvolle CI; de beveiliging van filialen en de regelsets blijven ongewijzigd.",
+        "fr": "A archivé les anciennes notes de version et a augmenté la limite de Dependabot à 15 requêtes par écosystème.\nActivé la simultanéité recommandée pour annuler les séries remplacées.\nFusion automatique activée uniquement pour les mises à jour directes des patchs NPM après un CI réussi ; protection des branches et règles inchangées.",
+        "it": "Ha archiviato le vecchie note di rilascio e alzato il limite Dependabot a 15 open pull request per ecosistema.\nAbilita la concorrenza consigliata per annullare le esecuzioni superate.\nUnificazione automatica solo per gli aggiornamenti diretti di NPM dopo CI; protezione e regole per filiali invariati.",
+        "es": "Archivó las notas de la versión anterior y elevó el límite del Dependabot a 15 pull requests abiertos por ecosistema.\nActivó la simultaneidad recomendada para cancelar las ejecuciones sustituidas.\nSe habilitó la fusión automática solo para actualizar los parches de NPM directamente tras una CI correcta; la protección de sucursales y los conjuntos de reglas no cambian",
+        "pl": "Zarchiwizowano starsze notatki o wydaniu i podniosły limit Dependabot do 15 otwartych żądań pull na ekosystem.\nWłączono zalecaną współbieżność przepływu pracy, aby anulować zastąpione uruchomienia.\nWłączono automatyczne scalanie tylko dla bezpośrednich aktualizacji poprawek npm po pomyślnym CI; ochrona gałęzi i zestawy reguł pozostają niezmienione.",
+        "uk": "Архівували старі нотатки до випуску та підвищили ліміт Dependabot до 15 відкритих запитів на витяг на екосистему.\nУвімкнено рекомендовану одночасність робочого процесу для скасування замінених запусків.\nУвімкнено автоматичне об'єднання лише для прямих оновлень патчів npm після успішного CI; захист гілок та набори правил залишаються незмінними.",
+        "zh-cn": "存档了较早的发行说明，并将 Dependabot 的限制提高到每个生态系统 15 个未处理的拉取请求。\n启用推荐的工作流并发性以取消被取代的运行。\n仅在 CI 成功后直接更新 npm 补丁时启用自动合并；分支保护和规则集保持不变。"
+      },
+      "0.1.0": {
+        "en": "Improved refresh and school search, kept profile IDs stable, and protected custom state settings during cleanup. Standardized calendar and timetable field handling and used English section names for new record channels.\nEnabled automatic npm publishing for tagged releases, added Node.js 26 to CI, and switched Dependabot updates to manual merges.",
+        "de": "Aktualisierung und Schulsuche verbessert, Profil-IDs stabilisiert und benutzerdefinierte Datenpunkt-Einstellungen bei der Bereinigung geschützt. Kalender- und Stundenplanfelder vereinheitlicht; neue Datensatzkanäle verwenden englische Abschnittsnamen.\nAutomatische npm-Veröffentlichung für getaggte Releases eingerichtet, Node.js 26 in die CI aufgenommen und Dependabot-Updates auf manuelles Zusammenführen umgestellt.",
+        "ru": "Улучшены обновление данных и поиск школ; идентификаторы профилей остаются стабильными, а пользовательские настройки состояний сохраняются при очистке. Унифицирована обработка полей календаря и расписания; новые каналы записей используют английские названия разделов.\nВключена автоматическая публикация npm для релизов с тегами, в CI добавлена Node.js 26, обновления Dependabot теперь объединяются вручную.",
+        "pt": "Melhoradas a atualização e a pesquisa de escolas, mantidos os IDs de perfil estáveis e protegidas as configurações personalizadas dos estados durante a limpeza. Padronizado o tratamento dos campos do calendário e do horário; novos canais de registos usam nomes de secções em inglês.\nAtivada a publicação automática no npm para versões com tags, adicionado o Node.js 26 à CI e alteradas as atualizações do Dependabot para integração manual.",
+        "nl": "Het vernieuwen en zoeken naar scholen verbeterd, profiel-ID’s stabiel gehouden en aangepaste statusinstellingen bij het opschonen beschermd. Velden voor agenda en lesrooster gestandaardiseerd; nieuwe recordkanalen gebruiken Engelse sectienamen.\nAutomatische npm-publicatie voor releases met tags ingeschakeld, Node.js 26 aan CI toegevoegd en Dependabot-updates ingesteld op handmatig samenvoegen.",
+        "fr": "Amélioration de l’actualisation et de la recherche d’écoles, stabilisation des identifiants de profil et protection des paramètres d’état personnalisés lors du nettoyage. Normalisation des champs du calendrier et de l’emploi du temps ; les nouveaux canaux d’enregistrement utilisent des noms de section en anglais.\nActivation de la publication npm automatique pour les versions étiquetées, ajout de Node.js 26 à la CI et passage à la fusion manuelle des mises à jour Dependabot.",
+        "it": "Migliorati l’aggiornamento e la ricerca delle scuole, mantenuti stabili gli ID dei profili e protette le impostazioni personalizzate degli stati durante la pulizia. Uniformata la gestione dei campi di calendario e orario; i nuovi canali dei record usano nomi di sezione in inglese.\nAttivata la pubblicazione automatica su npm per le versioni con tag, aggiunto Node.js 26 alla CI e impostata l’unione manuale degli aggiornamenti Dependabot.",
+        "es": "Mejoradas la actualización y la búsqueda de centros, estabilizados los ID de perfil y protegidos los ajustes personalizados de los estados durante la limpieza. Unificado el tratamiento de los campos de calendario y horario; los nuevos canales de registros usan nombres de sección en inglés.\nActivada la publicación automática en npm para las versiones etiquetadas, añadido Node.js 26 a la CI y configurada la integración manual de las actualizaciones de Dependabot.",
+        "pl": "Ulepszono odświeżanie danych i wyszukiwanie szkół, ustabilizowano identyfikatory profili i zabezpieczono ustawienia niestandardowe stanów podczas czyszczenia. Ujednolicono obsługę pól kalendarza i planu lekcji; nowe kanały rekordów używają angielskich nazw sekcji.\nWłączono automatyczne publikowanie w npm wersji oznaczonych tagami, dodano Node.js 26 do CI i wprowadzono ręczne scalanie aktualizacji Dependabot.",
+        "uk": "Покращено оновлення даних і пошук шкіл, стабілізовано ідентифікатори профілів і захищено користувацькі налаштування станів під час очищення. Уніфіковано обробку полів календаря й розкладу; нові канали записів використовують англійські назви розділів.\nУвімкнено автоматичне публікування в npm для випусків із тегами, додано Node.js 26 до CI й переведено оновлення Dependabot на ручне злиття.",
+        "zh-cn": "改进了刷新和学校搜索，保持个人资料 ID 稳定，并在清理时保护状态的自定义设置。统一处理日历和课程表字段；新建的记录通道使用英文分区名称。\n为带标签的版本启用自动 npm 发布，在 CI 中加入 Node.js 26，并改为手动合并 Dependabot 更新。"
+      },
+      "0.0.1": {
+        "en": "initial release",
+        "de": "Erstveröffentlichung",
+        "ru": "Начальная версия",
+        "pt": "lançamento inicial",
+        "nl": "Eerste uitgave",
+        "fr": "Première version",
+        "it": "Versione iniziale",
+        "es": "Versión inicial",
+        "pl": "Pierwsze wydanie",
+        "uk": "Початкова версія",
+        "zh-cn": "首次出版"
+      }
+    },
+    "titleLang": {
+      "en": "Schulportal Hessen",
+      "de": "Schulportal Hessen",
+      "ru": "Schulportal Hessen",
+      "pt": "Schulportal Hessen",
+      "nl": "Schulportal Hessen",
+      "fr": "Schulportal Hessen",
+      "it": "Schulportal Hessen",
+      "es": "Schulportal Hessen",
+      "pl": "Schulportal Hessen",
+      "uk": "Schulportal Hessen",
+      "zh-cn": "Schulportal Hessen"
+    },
+    "desc": {
+      "en": "Adapter for the Schulportal Hessen school portal",
+      "de": "Adapter für das Schulportal Hessen",
+      "ru": "Адаптер для школьного портала Schulportal Hessen",
+      "pt": "Adaptador para o portal escolar Schulportal Hessen",
+      "nl": "Adapter voor het Schulportal Hessen-schoolportaal",
+      "fr": "Adaptateur pour le portail scolaire Schulportal Hessen",
+      "it": "Adattatore per il portale scolastico Schulportal Hessen",
+      "es": "Adaptador para el portal escolar Schulportal Hessen",
+      "pl": "Adapter do portalu szkolnego Schulportal Hessen",
+      "uk": "Адаптер для шкільного порталу Schulportal Hessen",
+      "zh-cn": "Schulportal Hessen 学校门户的适配器"
+    },
+    "authors": [
+      "Voodoo2man <Voodoo2man@outlook.de>"
+    ],
+    "keywords": [
+      "school",
+      "education",
+      "schulportal",
+      "hessen"
+    ],
+    "licenseInformation": {
+      "type": "free",
+      "license": "MIT"
+    },
+    "platform": "Javascript/Node.js",
+    "icon": "schulportal-hessen.png",
+    "enabled": true,
+    "extIcon": "https://raw.githubusercontent.com/Voodoo2man/ioBroker.schulportal-hessen/main/admin/schulportal-hessen.png",
+    "readme": "https://github.com/Voodoo2man/ioBroker.schulportal-hessen/blob/main/README.md",
+    "loglevel": "info",
+    "tier": 3,
+    "mode": "daemon",
+    "type": "misc-data",
+    "compact": true,
+    "messagebox": true,
+    "connectionType": "cloud",
+    "dataSource": "poll",
+    "adminUI": {
+      "config": "json"
+    },
+    "dependencies": [
+      {
+        "js-controller": ">=7.2.2"
+      }
+    ],
+    "globalDependencies": [
+      {
+        "admin": ">=8.3.5"
+      }
+    ]
+  },
+  "native": {
+    "accountName": "",
+    "schoolSearch": "",
+    "schoolId": "",
+    "credentialId": "",
+    "refreshIntervalMinutes": 60
+  },
+  "objects": [],
+  "instanceObjects": []
 }
