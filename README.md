@@ -56,9 +56,10 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 
 ### **WORK IN PROGRESS**
 
-- (Voodoo2man) Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.
-- (Voodoo2man) Enabled recommended workflow concurrency to cancel superseded runs.
-- (Voodoo2man) Enabled auto-merging only for direct npm patch updates after successful CI; branch protection and rulesets remain unchanged.
+### 0.1.1 (2026-11-24)
+
+- (Voodoo2man) Added CI-gated auto-merging for direct npm patch updates and raised the Dependabot pull request limit.
+- (Voodoo2man) Aligned workflow concurrency with repository recommendations and excluded the archived changelog from the npm package.
 
 ### 0.1.0 (2026-11-23)
 

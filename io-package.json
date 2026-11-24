@@ -1,8 +1,21 @@
 {
 	"common": {
 		"name": "schulportal-hessen",
-		"version": "0.1.0",
+		"version": "0.1.1",
 		"news": {
+			"0.1.1": {
+				"en": "Improved dependency automation with CI-gated merging for direct npm patch updates and higher Dependabot limits; aligned workflow concurrency and excluded archived changelog history from the npm package.",
+				"de": "Abhängigkeiten automatisiert gepflegt: direkte npm-Patchupdates werden nach erfolgreicher CI zusammengeführt und Dependabot erhält höhere PR-Limits. Workflow-Concurrency angepasst und das Changelog-Archiv aus dem npm-Paket ausgeschlossen.",
+				"ru": "Улучшена автоматизация зависимостей: прямые patch-обновления npm объединяются после успешного CI, увеличены лимиты Dependabot. Настроена рекомендуемая параллельность workflow, архив changelog исключён из npm-пакета.",
+				"pt": "A automação de dependências foi aprimorada: atualizações patch diretas do npm são integradas após CI bem-sucedida e os limites do Dependabot foram aumentados. A concorrência dos workflows foi alinhada à recomendação e o changelog arquivado foi excluído do pacote npm.",
+				"nl": "Dependencybeheer verbeterd: directe npm-patchupdates worden na geslaagde CI samengevoegd en de Dependabot-limieten zijn verhoogd. De workflow-concurrency is afgestemd op de aanbeveling en het gearchiveerde wijzigingslogboek is uit het npm-pakket gehouden.",
+				"fr": "Automatisation des dépendances améliorée : les mises à jour de correctif directes npm sont fusionnées après une CI réussie et les limites Dependabot ont été augmentées. La concurrence des workflows a été alignée sur la recommandation et l’historique archivé a été exclu du paquet npm.",
+				"it": "Migliorata l’automazione delle dipendenze: gli aggiornamenti patch diretti di npm vengono uniti dopo il superamento della CI e sono stati aumentati i limiti di Dependabot. La concorrenza dei workflow è stata allineata alla raccomandazione e il changelog archiviato è stato escluso dal pacchetto npm.",
+				"es": "Se mejoró la automatización de dependencias: las actualizaciones patch directas de npm se integran tras superar la CI y se aumentaron los límites de Dependabot. Se ajustó la concurrencia de los workflows a la recomendación y se excluyó del paquete npm el historial archivado del changelog.",
+				"pl": "Usprawniono automatyzację zależności: bezpośrednie aktualizacje npm typu patch są scalane po pomyślnym CI, a limity Dependabot zostały zwiększone. Dostosowano współbieżność workflow do zaleceń i wykluczono z pakietu npm zarchiwizowany changelog.",
+				"uk": "Покращено автоматизацію залежностей: прямі patch-оновлення npm об’єднуються після успішного CI, а ліміти Dependabot збільшено. Налаштування паралельності workflow узгоджено з рекомендаціями, архів changelog вилучено з пакета npm.",
+				"zh-cn": "改进了依赖自动化：直接 npm 补丁更新在 CI 成功后自动合并，并提高了 Dependabot 限额。工作流并发设置已按建议调整，归档的更改日志已从 npm 包中排除。"
+			},
 			"0.1.0": {
 				"en": "Improved refresh and school search, kept profile IDs stable, and protected custom state settings during cleanup. Standardized calendar and timetable field handling and used English section names for new record channels.\nEnabled automatic npm publishing for tagged releases, added Node.js 26 to CI, and switched Dependabot updates to manual merges.",
 				"de": "Aktualisierung und Schulsuche verbessert, Profil-IDs stabilisiert und benutzerdefinierte Datenpunkt-Einstellungen bei der Bereinigung geschützt. Kalender- und Stundenplanfelder vereinheitlicht; neue Datensatzkanäle verwenden englische Abschnittsnamen.\nAutomatische npm-Veröffentlichung für getaggte Releases eingerichtet, Node.js 26 in die CI aufgenommen und Dependabot-Updates auf manuelles Zusammenführen umgestellt.",
