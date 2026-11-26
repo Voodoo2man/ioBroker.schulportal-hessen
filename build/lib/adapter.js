@@ -468,6 +468,14 @@ function getVerifiedTimetablePeriodNumber(value) {
   }
   return String(period);
 }
+function getVerifiedTimetablePeriodTimes(value) {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (getVerifiedTimetablePeriodNumber(normalized) === null) {
+    return null;
+  }
+  const match = /((?:[01]?\d|2[0-3]):[0-5]\d)\s*[-–—]\s*((?:[01]?\d|2[0-3]):[0-5]\d)/u.exec(normalized);
+  return (match == null ? void 0 : match[1]) && match[2] ? { startTime: match[1], endTime: match[2] } : null;
+}
 function getRecordTimetablePeriod(record) {
   if (record.format !== "html") {
     return null;
@@ -725,6 +733,48 @@ function groupTimetableRecords(records, today) {
     }
   }
   return buckets;
+}
+function parseTimetableClockTime(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/u.exec(normalized);
+  if (!match) {
+    return null;
+  }
+  return { value: normalized, minutes: Number(match[1]) * 60 + Number(match[2]) };
+}
+function getTimetableClockTime(record, fieldId) {
+  if (record.format !== "html") {
+    return parseTimetableClockTime(record.fields[fieldId]);
+  }
+  const fieldHeader = fieldId.replace(/_/gu, " ");
+  const explicitField = record.fields.find(
+    (field) => field.header && (0, import_portal_parser.canonicalPortalColumn)(field.header) === fieldHeader
+  );
+  if (explicitField) {
+    return parseTimetableClockTime(explicitField.text);
+  }
+  const period = getRecordTimetablePeriod(record);
+  const times = period ? getVerifiedTimetablePeriodTimes(period.field.text) : null;
+  return parseTimetableClockTime(fieldId === "start_time" ? times == null ? void 0 : times.startTime : times == null ? void 0 : times.endTime);
+}
+function getTimetableSchoolHours(records) {
+  var _a, _b;
+  let earliestStart = null;
+  let latestEnd = null;
+  for (const record of records) {
+    const start = getTimetableClockTime(record, "start_time");
+    if (start && (!earliestStart || start.minutes < earliestStart.minutes)) {
+      earliestStart = start;
+    }
+    const end = getTimetableClockTime(record, "end_time");
+    if (end && (!latestEnd || end.minutes > latestEnd.minutes)) {
+      latestEnd = end;
+    }
+  }
+  return { schoolStart: (_a = earliestStart == null ? void 0 : earliestStart.value) != null ? _a : "", schoolEnd: (_b = latestEnd == null ? void 0 : latestEnd.value) != null ? _b : "" };
 }
 function isChildLessonSectionId(value) {
   return Object.prototype.hasOwnProperty.call(CHILD_LESSON_SECTION_NAMES, value);
@@ -1577,6 +1627,11 @@ class SchulportalHessenAdapter extends utils.Adapter {
         await this.setAckState(`${dayBase}.lessonCount`, day.records.length);
         await this.ensureState(`${dayBase}.hasLessons`, "Has lessons", "boolean", "indicator", false);
         await this.setAckState(`${dayBase}.hasLessons`, day.records.length > 0);
+        const schoolHours = getTimetableSchoolHours(day.records);
+        await this.ensureState(`${dayBase}.schoolStart`, "School start", "string", "text", "");
+        await this.setAckState(`${dayBase}.schoolStart`, schoolHours.schoolStart);
+        await this.ensureState(`${dayBase}.schoolEnd`, "School end", "string", "text", "");
+        await this.setAckState(`${dayBase}.schoolEnd`, schoolHours.schoolEnd);
         const lessonsBase = `${dayBase}.lessons`;
         await this.ensureChannel(lessonsBase, "Lessons");
         await this.ensureState(
