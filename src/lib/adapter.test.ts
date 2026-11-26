@@ -204,6 +204,7 @@ function timetableRecord(
 	day: string,
 	subject: string,
 	header = 'Day',
+	times?: { startTime?: string; endTime?: string },
 ): PortalRecord {
 	return {
 		format: 'html',
@@ -213,6 +214,12 @@ function timetableRecord(
 		fields: [
 			{ header, text: day, links: [], attributes: {} },
 			{ header: 'Subject', text: subject, links: [], attributes: {} },
+			...(times?.startTime === undefined
+				? []
+				: [{ header: 'Start time', text: times.startTime, links: [], attributes: {} }]),
+			...(times?.endTime === undefined
+				? []
+				: [{ header: 'End time', text: times.endTime, links: [], attributes: {} }]),
 		],
 		context: { childId },
 	};
@@ -2489,12 +2496,18 @@ describe('parent child timetable object synchronization', () => {
 			context: { childId, timetableWeekday: 'friday' },
 		};
 		const records = [
-			timetableRecord('b', childId, '2026-11-11', 'Mathematics'),
-			timetableRecord('f', childId, '2026-11-11', 'Physics'),
-			timetableRecord('c', childId, '2026-11-12', 'Biology', 'Plan / Tag (lokal)'),
+			timetableRecord('b', childId, '2026-11-11', 'Mathematics', 'Day', { startTime: '08:55', endTime: '09:40' }),
+			timetableRecord('f', childId, '2026-11-11', 'Physics', 'Day', { startTime: '07:55', endTime: '08:40' }),
+			timetableRecord('c', childId, '2026-11-12', 'Biology', 'Plan / Tag (lokal)', {
+				startTime: '10:15',
+				endTime: '11:00',
+			}),
 			timetableRecord('d', childId, '2026-11-10', 'Previous Tuesday', 'PlanDatum'),
 			timetableWeekdayRecord('e', childId, 'Di.', 'Next Tuesday'),
-			timetableRecord('g', childId, 'Mo.', 'Next Monday', 'PlanWochentag'),
+			timetableRecord('g', childId, 'Mo.', 'Next Monday', 'PlanWochentag', {
+				startTime: '25:99',
+				endTime: '09:75',
+			}),
 			timedFridayRecord,
 		];
 		const legacyRecordsBase = `${timetableBase}.records`;
@@ -2579,6 +2592,43 @@ describe('parent child timetable object synchronization', () => {
 		}
 		expect(states.get(`${timetableBase}.today.lessonCount`)?.val).to.equal(2);
 		expect(states.get(`${timetableBase}.tomorrow.lessonCount`)?.val).to.equal(1);
+		const dayIds = [
+			'today',
+			'tomorrow',
+			'week.monday',
+			'week.tuesday',
+			'week.wednesday',
+			'week.thursday',
+			'week.friday',
+			'week.saturday',
+			'week.sunday',
+		];
+		for (const day of dayIds) {
+			for (const stateName of ['schoolStart', 'schoolEnd']) {
+				const stateId = `${timetableBase}.${day}.${stateName}`;
+				expect(states.has(stateId), `${stateId} state exists`).to.equal(true);
+				expect(objects.get(stateId)?.common).to.include({
+					type: 'string',
+					role: 'text',
+					read: true,
+					write: false,
+				});
+			}
+		}
+		expect(states.get(`${timetableBase}.today.schoolStart`)?.val).to.equal('07:55');
+		expect(states.get(`${timetableBase}.today.schoolEnd`)?.val).to.equal('09:40');
+		expect(states.get(`${timetableBase}.tomorrow.schoolStart`)?.val).to.equal('10:15');
+		expect(states.get(`${timetableBase}.tomorrow.schoolEnd`)?.val).to.equal('11:00');
+		expect(states.get(`${timetableBase}.week.monday.schoolStart`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.monday.schoolEnd`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.tuesday.schoolStart`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.tuesday.schoolEnd`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.friday.schoolStart`)?.val).to.equal('11:25');
+		expect(states.get(`${timetableBase}.week.friday.schoolEnd`)?.val).to.equal('12:10');
+		expect(states.get(`${timetableBase}.week.saturday.schoolStart`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.saturday.schoolEnd`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.sunday.schoolStart`)?.val).to.equal('');
+		expect(states.get(`${timetableBase}.week.sunday.schoolEnd`)?.val).to.equal('');
 		expect(objects.get(`${timetableBase}.week.friday.lessonCount`)?.common).to.include({
 			type: 'number',
 			role: 'value',
@@ -2592,6 +2642,49 @@ describe('parent child timetable object synchronization', () => {
 		expect(objects.get(todayLesson)?.type).to.equal('channel');
 		expect(objects.get(todayLesson)?.common.name).to.equal('Custom migrated lesson');
 		expect(objects.has(`${timetableBase}.week`)).to.equal(true);
+	});
+
+	it('derives school hours from a verified period range when explicit time fields are absent', async () => {
+		const { adapter, states } = makeTestAdapter();
+		const childId = 'g'.repeat(64);
+		const childName = 'Student Period';
+		const childPath = readableChildBase(childId, childName).slice('students.'.length);
+		await adapter.commitChildLessons([childWithRecords(childId, childName, [])]);
+
+		const periodOnlyRecord: PortalRecord = {
+			format: 'html',
+			id: `timetable:${'j'.repeat(64)}`,
+			section: 'own',
+			attributes: {},
+			fields: [
+				{ header: 'Stunde', text: '5 11:25 - 12:10', links: [], attributes: {} },
+				{ header: 'Lesson', text: 'Chemistry', links: [], attributes: {} },
+			],
+			context: { childId, timetableWeekday: 'friday' },
+		};
+		const week: Record<string, PortalRecord[]> = {
+			monday: [],
+			tuesday: [],
+			wednesday: [],
+			thursday: [],
+			friday: [periodOnlyRecord],
+			saturday: [],
+			sunday: [],
+		};
+		await adapter.commitChildTimetables([
+			{
+				child: { id: childId, records: [periodOnlyRecord] },
+				childPath,
+				buckets: { today: [], tomorrow: [], week },
+			},
+		]);
+
+		const timetableBase = `${readableChildBase(childId, childName)}.timetable`;
+		const fridayBase = `${timetableBase}.week.friday`;
+		expect(states.get(`${fridayBase}.schoolStart`)?.val).to.equal('11:25');
+		expect(states.get(`${fridayBase}.schoolEnd`)?.val).to.equal('12:10');
+		expect(states.has(`${fridayBase}.lessons.05.start_time`)).to.equal(false);
+		expect(states.has(`${fridayBase}.lessons.05.end_time`)).to.equal(false);
 	});
 
 	it('uses a verified visible period cell for lesson IDs instead of numeric class values', async () => {

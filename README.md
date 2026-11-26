@@ -29,6 +29,7 @@ Look under `schulportal-hessen.<instance>` in the ioBroker object tree:
 | --- | --- |
 | `profile` | Profile information, including name and school when available |
 | `students.timetable`, `students.lessons` | Timetable and lesson data; for parent accounts, personal timetables and lessons appear under `students.<student>` when supported |
+| `students.<student>.timetable.today`, `students.<student>.timetable.tomorrow`, `students.<student>.timetable.week.<weekday>` | Each day channel includes read-only `schoolStart` and `schoolEnd` states for the earliest valid lesson start and latest valid lesson end; values are empty when no valid time is available |
 | `substitutions.today.json`, `substitutions.tomorrow.json` | Substitutions for today and tomorrow; other available dates are listed under `substitutions` |
 | `calendar.portal`, `calendar.school` | Ongoing and upcoming portal and school-calendar events |
 | `learningGroups` | Learning groups and assessments |
@@ -53,6 +54,10 @@ The adapter does not send or edit portal content. Retrieving a conversation **ma
 	Placeholder for the next version (at the beginning of the line):
 	### **WORK IN PROGRESS**
 -->
+### **WORK IN PROGRESS**
+
+- (Voodoo2man) Added earliest lesson start and latest lesson end states to timetable day channels.
+
 ### 0.1.1 (2026-11-24)
 
 - (Voodoo2man) Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.
