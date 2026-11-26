@@ -1,8 +1,21 @@
 {
   "common": {
     "name": "schulportal-hessen",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "news": {
+      "0.2.0": {
+        "en": "Added earliest lesson start and latest lesson end states to timetable day channels.",
+        "de": "Die Datenpunkte schoolStart und schoolEnd wurden in den Stundenplan-Tageskanälen ergänzt.",
+        "ru": "Добавлены ранние состояния начала урока и последнего окончания урока в дневные каналы расписания.",
+        "pt": "Adicionou os estados de início e fim da aula aos canais de horários diários.",
+        "nl": "De vroegste start van de les en de laatste eindstatus van de lessen toegevoegd aan de dagkanalen van het rooster.",
+        "fr": "Ajout des états de début et de fin de cours les plus anciens aux chaînes horaires.",
+        "it": "Aggiunti gli stati di inizio e fine lezione più recente ai canali orari.",
+        "es": "Se han añadido los estados de inicio y final más tardíos de la lección a los canales de horarios.",
+        "pl": "Dodano najwcześniejsze rozpoczęcie lekcji i ostatnie stany zakończenia lekcji do kanałów dnia harmonogramu.",
+        "uk": "Додано найраніший початок уроку та останні стани кінця уроку до каналів розкладу днів.",
+        "zh-cn": "在时间表频道中添加了最早的课程开始和最新的课程结束状态。"
+      },
       "0.1.1": {
         "en": "Archived older release notes and raised the Dependabot limit to 15 open pull requests per ecosystem.\nEnabled recommended workflow concurrency to cancel superseded runs.\nEnabled auto-merging only for direct npm patch updates after successful CI; branch protection and rulesets remain unchanged.",
         "de": "Archivierte ältere Versionshinweise und erhöhte Dependabot auf 15 Pull Requests pro Ökosystem.\nAktiviert die empfohlene Workflow-Absage ersetzter Läufe.\nAuto-Merging nur für direkte NPM-Patches nach erfolgtem CI aktiviert; Branch-Schutz und Regelsätze bleiben unverändert.",
